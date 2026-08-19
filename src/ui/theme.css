@@ -339,10 +339,16 @@
   color: var(--gold-bright);
   font-size: clamp(13px, 3.5vw, 15px);
   margin-bottom: 3px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .codex-card-icon {
-  margin-right: 6px;
+  width: 22px;
+  height: 22px;
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.6));
+  image-rendering: -webkit-optimize-contrast;
 }
 
 .codex-card-desc {

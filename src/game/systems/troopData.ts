@@ -194,21 +194,3 @@ export const TROOP_TYPE_BY_ID: Record<string, TroopType> = Object.fromEntries(
 // from the spawn pool until that mechanic exists. Still shown in the
 // codex for reference.
 export const UNSPAWNABLE_TROOP_IDS = new Set(['siege_tower']);
-
-// One glyph per troop id, shared by the battlefield renderer and the
-// codex so a unit reads the same way in both places.
-export const TROOP_ICON: Record<string, string> = {
-  levy: '\u{1F33E}',
-  spearman: '\u{1F531}',
-  archer: '\u{1F3F9}',
-  crossbowman: '\u{1F3AF}',
-  man_at_arms: '\u{1F6E1}\u{FE0F}',
-  knight: '\u{1F40E}',
-  sapper: '\u{26CF}\u{FE0F}',
-  battering_ram: '\u{1FAB5}',
-  siege_tower: '\u{1F3D7}\u{FE0F}',
-  mangonel: '\u{1F4A5}',
-  trebuchet: '\u{1FAA8}',
-  ballista: '\u{2716}\u{FE0F}',
-  marine_raider: '\u{2693}',
-};

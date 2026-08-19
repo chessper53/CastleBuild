@@ -1,7 +1,8 @@
 import Phaser from 'phaser';
 import { BuildSystem, type Point, type PointStructure, type Structure, type WallSection } from './buildSystem';
 import { Biome } from './terrainGenerator';
-import { TROOP_TYPES, TROOP_TYPE_BY_ID, TROOP_ICON, UNSPAWNABLE_TROOP_IDS, type TerrainTypeId, type TroopType } from './troopData';
+import { TROOP_TYPES, TROOP_TYPE_BY_ID, UNSPAWNABLE_TROOP_IDS, type TerrainTypeId, type TroopType } from './troopData';
+import { drawTroopIcon } from './troopIcons';
 
 interface StructureTarget {
   type: 'structure';
@@ -124,7 +125,7 @@ const CATEGORY_COLOR: Record<string, number> = {
 };
 
 function getEnemyVisual(troop: TroopType): { radius: number; color: number; dark: number } {
-  const radius = Phaser.Math.Clamp(6 + troop.health / 22, 6, 15);
+  const radius = Phaser.Math.Clamp(11 + troop.health / 14, 11, 24);
   const color = CATEGORY_COLOR[troop.id] ?? 0x8a2e2e;
   return { radius, color, dark: darken(color, 0.45) };
 }
@@ -163,29 +164,25 @@ export class CombatSystem {
     this.buildIconTextures();
   }
 
-  // Baking each troop's glyph into its own texture once (13 total, for
+  // Baking each troop's icon into its own texture once (13 total, for
   // the whole game session) instead of creating a Phaser Text object
   // per enemy: each Text object allocates its own backing 2D canvas,
   // and doing that once per spawned enemy exhausts the browser's canvas
   // context budget after enough waves, crashing the game. Pooled Image
   // objects referencing these shared textures have no such cost.
   private buildIconTextures() {
+    const size = 32;
     for (const troop of TROOP_TYPES) {
-      const glyph = TROOP_ICON[troop.id];
-      if (!glyph) continue;
       const key = `troop-icon-${troop.id}`;
       this.iconTextureKey[troop.id] = key;
       if (this.scene.textures.exists(key)) continue;
 
       const canvas = document.createElement('canvas');
-      canvas.width = 28;
-      canvas.height = 28;
+      canvas.width = size;
+      canvas.height = size;
       const ctx = canvas.getContext('2d');
       if (!ctx) continue;
-      ctx.font = '20px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(glyph, 14, 15);
+      drawTroopIcon(ctx, troop.id, size);
       this.scene.textures.addCanvas(key, canvas);
     }
   }
@@ -486,7 +483,7 @@ export class CombatSystem {
         const icon = this.getOrCreateIcon(i);
         icon.setTexture(iconKey);
         icon.setPosition(e.x, e.y);
-        icon.setDisplaySize(visual.radius * 1.8, visual.radius * 1.8);
+        icon.setDisplaySize(visual.radius * 1.5, visual.radius * 1.5);
         icon.setVisible(true);
       }
     }
