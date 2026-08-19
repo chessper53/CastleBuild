@@ -14,6 +14,11 @@ export interface TroopType {
   attack: number;
   wallDamage: number;
   attackCooldown: number;
+  // How many men (or engines) a single pack on the field represents.
+  // Cheap conscripts mob in dozens; a knight or siege engine is its
+  // own small, valuable formation - so packs get tougher in quality
+  // as they get smaller in number, not just flatly stronger.
+  stackCount: number;
   attackRange?: number;
   gateDamageMultiplier?: number;
   splashRadius?: number;
@@ -34,6 +39,7 @@ export const TROOP_TYPES: TroopType[] = [
     attack: 4,
     wallDamage: 1,
     attackCooldown: 1,
+    stackCount: 32,
     terrainModifiers: { PLAINS: 0, MUD: -0.15, WATER: -0.3, HILLS: -0.1, FOREST: 0.05, SAND: -0.05 },
   },
   {
@@ -45,6 +51,7 @@ export const TROOP_TYPES: TroopType[] = [
     attack: 6,
     wallDamage: 1,
     attackCooldown: 1.1,
+    stackCount: 24,
     terrainModifiers: { PLAINS: 0.05, MUD: -0.15, WATER: -0.3, HILLS: -0.1, FOREST: 0, SAND: -0.05 },
   },
   {
@@ -57,6 +64,7 @@ export const TROOP_TYPES: TroopType[] = [
     wallDamage: 0,
     attackCooldown: 1.3,
     attackRange: 6,
+    stackCount: 20,
     terrainModifiers: { PLAINS: 0.1, MUD: -0.2, WATER: -0.3, HILLS: 0.15, FOREST: -0.1, SAND: 0 },
   },
   {
@@ -69,6 +77,7 @@ export const TROOP_TYPES: TroopType[] = [
     wallDamage: 2,
     attackCooldown: 2,
     attackRange: 5,
+    stackCount: 16,
     terrainModifiers: { PLAINS: 0.05, MUD: -0.2, WATER: -0.3, HILLS: 0.1, FOREST: -0.05, SAND: 0 },
   },
   {
@@ -80,6 +89,7 @@ export const TROOP_TYPES: TroopType[] = [
     attack: 10,
     wallDamage: 2,
     attackCooldown: 1,
+    stackCount: 10,
     terrainModifiers: { PLAINS: 0, MUD: -0.25, WATER: -0.35, HILLS: -0.15, FOREST: 0, SAND: -0.1 },
   },
   {
@@ -92,6 +102,7 @@ export const TROOP_TYPES: TroopType[] = [
     attack: 14,
     wallDamage: 0,
     attackCooldown: 0.9,
+    stackCount: 5,
     terrainModifiers: { PLAINS: 0.2, MUD: -0.4, WATER: -0.5, HILLS: -0.2, FOREST: -0.3, SAND: -0.15 },
   },
   {
@@ -105,6 +116,7 @@ export const TROOP_TYPES: TroopType[] = [
     wallDamage: 6,
     attackCooldown: 2.5,
     requiresAdjacentToWall: true,
+    stackCount: 12,
     terrainModifiers: { PLAINS: 0, MUD: 0.1, WATER: -0.4, HILLS: -0.2, FOREST: 0, SAND: -0.1 },
   },
   {
@@ -118,6 +130,7 @@ export const TROOP_TYPES: TroopType[] = [
     gateDamageMultiplier: 3,
     attackCooldown: 1.5,
     requiresAdjacentToWall: true,
+    stackCount: 1,
     terrainModifiers: { PLAINS: 0, MUD: -0.4, WATER: -1, HILLS: -0.3, FOREST: -0.2, SAND: -0.15 },
   },
   {
@@ -130,6 +143,7 @@ export const TROOP_TYPES: TroopType[] = [
     wallDamage: 0,
     attackCooldown: 0,
     enablesWallBreach: true,
+    stackCount: 1,
     terrainModifiers: { PLAINS: 0, MUD: -0.5, WATER: -1, HILLS: -0.4, FOREST: -0.3, SAND: -0.2 },
   },
   {
@@ -143,6 +157,7 @@ export const TROOP_TYPES: TroopType[] = [
     attackCooldown: 3,
     attackRange: 8,
     splashRadius: 2,
+    stackCount: 2,
     terrainModifiers: { PLAINS: 0.1, MUD: -0.3, WATER: -1, HILLS: -0.2, FOREST: -0.4, SAND: -0.1 },
   },
   {
@@ -158,6 +173,7 @@ export const TROOP_TYPES: TroopType[] = [
     attackRange: 12,
     splashRadius: 3,
     requiresSetup: true,
+    stackCount: 1,
     terrainModifiers: { PLAINS: 0.1, MUD: -0.5, WATER: -1, HILLS: -0.3, FOREST: -1, SAND: -0.2 },
   },
   {
@@ -170,6 +186,7 @@ export const TROOP_TYPES: TroopType[] = [
     wallDamage: 3,
     attackCooldown: 3.5,
     attackRange: 10,
+    stackCount: 2,
     terrainModifiers: { PLAINS: 0.05, MUD: -0.3, WATER: -1, HILLS: 0, FOREST: -0.4, SAND: -0.1 },
   },
   {
@@ -181,6 +198,7 @@ export const TROOP_TYPES: TroopType[] = [
     attack: 7,
     wallDamage: 1,
     attackCooldown: 1.1,
+    stackCount: 14,
     terrainModifiers: { PLAINS: 0, MUD: 0, WATER: 0.3, HILLS: -0.1, FOREST: -0.05, SAND: 0.25 },
   },
 ];

@@ -76,34 +76,35 @@ const PROGRESS_CHECK_INTERVAL = 1.5; // seconds between "did I actually get clos
 const MIN_PROGRESS_DISTANCE = 25 * SCALE; // px an enemy must close over that interval or it's considered stuck
 const MIN_TERRAIN_SPEED_FACTOR = 0.05; // never fully immobilize - avoids permanent freezes
 
-// Each marker on the field is a pack of PACK_SIZE men, not one soldier -
-// fewer, tougher units per wave than before (each pack's hp is
-// multiplied accordingly), so a lone defender trading blows with a
-// pack is an actual fight instead of an instant kill.
-const PACK_SIZE = 16;
-const PACK_GRID = 4; // 4x4 formation
-const PACK_HP_MULTIPLIER = 5;
+// Each marker on the field is a pack of troop.stackCount men (or
+// engines), not one soldier - a pack's hp is that count times the
+// troop's own health, so a lone defender trading blows with a pack is
+// an actual fight instead of an instant kill.
 const PACK_CONNECT_RADIUS = 75 * SCALE; // packs within this range of each other visually link up
 
-const ENEMY_BASE_COUNT = 3;
-const ENEMY_COUNT_PER_ROUND = 1;
+const ENEMY_BASE_COUNT = 4;
+const ENEMY_COUNT_PER_ROUND = 2;
 
 const HILLS_DEFENDER_BONUS = 1.3; // +30% range and damage for defenders on high ground
 
 // Cumulative unlock schedule: a type becomes available in the spawn
 // pool from this round onward. Missing = available from round 1.
+// Round 1 is deliberately levy-only (peasants with pitchforks should
+// never threaten a built fort on their own) but real siege equipment
+// shows up fast after that - dragging it out past round 8-9 just made
+// every early wave a non-event.
 const UNLOCK_ROUND: Record<string, number> = {
   spearman: 2,
-  archer: 3,
-  man_at_arms: 4,
-  crossbowman: 5,
-  marine_raider: 6,
-  knight: 7,
-  sapper: 8,
-  battering_ram: 9,
-  mangonel: 10,
-  ballista: 12,
-  trebuchet: 14,
+  archer: 2,
+  crossbowman: 3,
+  man_at_arms: 3,
+  sapper: 3,
+  marine_raider: 4,
+  battering_ram: 4,
+  mangonel: 4,
+  knight: 5,
+  ballista: 5,
+  trebuchet: 6,
 };
 
 const BIOME_TO_TERRAIN_ID: Partial<Record<Biome, TerrainTypeId>> = {
@@ -139,22 +140,6 @@ const CATEGORY_COLOR: Record<string, number> = {
   marine_raider: 0x2a6b7a,
 };
 
-// A PACK_GRID x PACK_GRID formation (relative to visual.radius) so a
-// pack reads as an actual body of men, not a lone dot - and visibly
-// thins out row by row as it takes losses.
-const PACK_FORMATION: { x: number; y: number }[] = (() => {
-  const offsets: { x: number; y: number }[] = [];
-  for (let row = 0; row < PACK_GRID; row++) {
-    for (let col = 0; col < PACK_GRID; col++) {
-      offsets.push({
-        x: (col - (PACK_GRID - 1) / 2) / (PACK_GRID - 1),
-        y: (row - (PACK_GRID - 1) / 2) / (PACK_GRID - 1),
-      });
-    }
-  }
-  return offsets;
-})();
-
 function getEnemyVisual(troop: TroopType): { radius: number; color: number; dark: number } {
   const radius = Phaser.Math.Clamp(11 + troop.health / 14, 11, 24) * SCALE;
   const color = CATEGORY_COLOR[troop.id] ?? 0x8a2e2e;
@@ -167,6 +152,7 @@ export class CombatSystem {
   private soldiers: Soldier[] = [];
   private graphics: Phaser.GameObjects.Graphics;
   private enemyIconPool: Phaser.GameObjects.Image[] = [];
+  private stackTextPool: Phaser.GameObjects.Text[] = [];
   private iconTextureKey: Record<string, string> = {};
   private buildSystem: BuildSystem;
   private worldWidth: number;
@@ -241,7 +227,7 @@ export class CombatSystem {
       const troop = this.pickTroopType(round);
       const { x, y } = this.randomEdgePoint();
       const target = this.acquireTarget(x, y);
-      const packHp = troop.health * PACK_HP_MULTIPLIER;
+      const packHp = troop.health * troop.stackCount;
       this.enemies.push({
         x,
         y,
@@ -529,30 +515,18 @@ export class CombatSystem {
       const e = this.enemies[i];
       const visual = getEnemyVisual(e.troop);
 
-      // Each marker is a pack of PACK_SIZE men, not one soldier - render
-      // as a formation that visibly thins out (fewer members drawn) as
-      // it takes losses, instead of one dot that's either alive or dead.
-      const hpFrac = e.hp / e.maxHp;
-      const aliveMembers = Math.max(1, Math.round(PACK_SIZE * hpFrac));
-      const spread = visual.radius * 1.6;
-      const memberRadius = Math.max(2.5, visual.radius * 0.22);
-      for (let m = 0; m < aliveMembers; m++) {
-        const off = PACK_FORMATION[m];
-        const mx = e.x + off.x * spread;
-        const my = e.y + off.y * spread;
-        this.graphics.fillStyle(visual.color, 1);
-        this.graphics.fillCircle(mx, my, memberRadius);
-        this.graphics.lineStyle(1 * SCALE * 0.4, visual.dark, 1);
-        this.graphics.strokeCircle(mx, my, memberRadius);
-      }
+      this.graphics.fillStyle(visual.color, 1);
+      this.graphics.fillCircle(e.x, e.y, visual.radius);
+      this.graphics.lineStyle(2 * SCALE * 0.4, visual.dark, 1);
+      this.graphics.strokeCircle(e.x, e.y, visual.radius);
       if (e.state === 'setup') {
         this.graphics.lineStyle(2 * SCALE * 0.4, 0xe0b94f, 0.9);
-        this.graphics.strokeCircle(e.x, e.y, spread / 2 + memberRadius + 4 * SCALE);
+        this.graphics.strokeCircle(e.x, e.y, visual.radius + 4 * SCALE);
       }
 
       const barH = 3 * SCALE * 0.5;
-      const barW = spread + memberRadius * 2;
-      const barY = e.y - spread / 2 - memberRadius - 7 * SCALE * 0.5;
+      const barW = visual.radius * 2;
+      const barY = e.y - visual.radius - 7 * SCALE * 0.5;
       const frac = Phaser.Math.Clamp(e.hp / e.maxHp, 0, 1);
       this.graphics.fillStyle(0x1a1512, 0.8);
       this.graphics.fillRect(e.x - barW / 2, barY, barW, barH);
@@ -567,9 +541,30 @@ export class CombatSystem {
         icon.setDisplaySize(visual.radius * 1.9, visual.radius * 1.9);
         icon.setVisible(true);
       }
+
+      // Stack count badge: how many men/engines are left in this pack,
+      // not just a health-bar fraction - the number itself is the "did
+      // I just wipe out half a squad" feedback.
+      const remaining = Math.max(1, Math.min(e.troop.stackCount, Math.ceil(e.hp / e.troop.health)));
+      const badgeX = e.x + visual.radius * 0.72;
+      const badgeY = e.y + visual.radius * 0.72;
+      const badgeRadius = Math.max(6, visual.radius * 0.36);
+      this.graphics.fillStyle(0x1a1512, 0.9);
+      this.graphics.fillCircle(badgeX, badgeY, badgeRadius);
+      this.graphics.lineStyle(1.5 * SCALE * 0.4, 0xe0b94f, 1);
+      this.graphics.strokeCircle(badgeX, badgeY, badgeRadius);
+
+      const stackText = this.getOrCreateStackText(i);
+      stackText.setText(String(remaining));
+      stackText.setFontSize(Math.max(10, badgeRadius * 1.3));
+      stackText.setPosition(badgeX, badgeY);
+      stackText.setVisible(true);
     }
     for (let i = this.enemies.length; i < this.enemyIconPool.length; i++) {
       this.enemyIconPool[i].setVisible(false);
+    }
+    for (let i = this.enemies.length; i < this.stackTextPool.length; i++) {
+      this.stackTextPool[i].setVisible(false);
     }
   }
 
@@ -582,9 +577,30 @@ export class CombatSystem {
     return icon;
   }
 
+  // Pooled and reused across frames/waves - never created per-enemy,
+  // since each Text object owns its own backing canvas and spawning
+  // one per enemy per frame exhausts the browser's canvas budget and
+  // crashes the game after a few waves.
+  private getOrCreateStackText(index: number): Phaser.GameObjects.Text {
+    let text = this.stackTextPool[index];
+    if (!text) {
+      text = this.scene.add.text(0, 0, '', {
+        fontFamily: 'Georgia, serif',
+        fontSize: '12px',
+        color: '#f2e6c8',
+        fontStyle: 'bold',
+      });
+      text.setOrigin(0.5, 0.5);
+      text.setDepth(10);
+      this.stackTextPool[index] = text;
+    }
+    return text;
+  }
+
   clear() {
     this.enemies = [];
     this.graphics.clear();
     for (const icon of this.enemyIconPool) icon.setVisible(false);
+    for (const text of this.stackTextPool) text.setVisible(false);
   }
 }
