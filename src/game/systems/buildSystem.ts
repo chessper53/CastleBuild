@@ -6,9 +6,13 @@ export interface Point {
   y: number;
 }
 
-export interface WallPath {
-  kind: 'wall';
-  points: Point[];
+// Walls are broken into fixed-length sections, each independently
+// destructible, so a long rampart crumbles piece by piece under siege
+// instead of vanishing all at once.
+export interface WallSection {
+  kind: 'wallSection';
+  a: Point;
+  b: Point;
   hp: number;
   maxHp: number;
 }
@@ -21,7 +25,7 @@ export interface PointStructure {
   maxHp: number;
 }
 
-export type Structure = WallPath | PointStructure;
+export type Structure = WallSection | PointStructure;
 
 const UNBUILDABLE_BIOMES = new Set<Biome>([Biome.Water, Biome.River]);
 
@@ -36,10 +40,14 @@ const INVALID_COLOR = 0xb0392f;
 const VALID_COLOR = 0xd9c27e;
 const DAMAGE_COLOR = 0x7a2a20;
 
-const WALL_HP_PER_100PX = 45;
-const WALL_BASE_HP = 60;
+const SECTION_LENGTH = 56;
+const WALL_SECTION_MAX_HP = 70;
 const TOWER_MAX_HP = 180;
 const GATE_MAX_HP = 90;
+
+const HITBAR_WIDTH = 34;
+const HITBAR_HEIGHT = 7;
+const HITBAR_GAP = 10;
 
 export const WALL_SNAP_RADIUS = 30; // wall endpoints snap to other wall vertices within this range
 export const STRUCTURE_SNAP_RADIUS = 34; // towers/gates snap onto the nearest wall within this range
@@ -54,12 +62,39 @@ function closestPointOnSegment(p: Point, a: Point, b: Point): Point {
   return { x: a.x + abx * t, y: a.y + aby * t };
 }
 
-function pathLength(points: Point[]): number {
-  let len = 0;
+// Walks a freehand-drawn polyline and cuts it into fixed-length
+// straight chunks, each of which becomes its own destructible section.
+function splitIntoSections(points: Point[], sectionLength: number): { a: Point; b: Point }[] {
+  const sections: { a: Point; b: Point }[] = [];
+  let sectionStart = points[0];
+  let accumulated = 0;
+
   for (let i = 1; i < points.length; i++) {
-    len += Phaser.Math.Distance.Between(points[i - 1].x, points[i - 1].y, points[i].x, points[i].y);
+    let segStart = points[i - 1];
+    const segEnd = points[i];
+    let segLen = Phaser.Math.Distance.Between(segStart.x, segStart.y, segEnd.x, segEnd.y);
+
+    while (accumulated + segLen >= sectionLength) {
+      const remaining = sectionLength - accumulated;
+      const t = segLen === 0 ? 0 : remaining / segLen;
+      const cut: Point = {
+        x: segStart.x + (segEnd.x - segStart.x) * t,
+        y: segStart.y + (segEnd.y - segStart.y) * t,
+      };
+      sections.push({ a: sectionStart, b: cut });
+      sectionStart = cut;
+      segStart = cut;
+      segLen = Phaser.Math.Distance.Between(segStart.x, segStart.y, segEnd.x, segEnd.y);
+      accumulated = 0;
+    }
+    accumulated += segLen;
   }
-  return len;
+
+  const last = points[points.length - 1];
+  if (sectionStart.x !== last.x || sectionStart.y !== last.y) {
+    sections.push({ a: sectionStart, b: last });
+  }
+  return sections;
 }
 
 function lerpColor(a: number, b: number, t: number): number {
@@ -94,13 +129,13 @@ export class BuildSystem {
     return this.structures;
   }
 
-  /** Snaps to the nearest existing wall vertex, for connecting new wall paths to old ones. */
+  /** Snaps to the nearest existing wall-section endpoint, for connecting new wall paths to old ones. */
   snapToWallVertex(x: number, y: number, radius = WALL_SNAP_RADIUS): Point {
     let best: Point = { x, y };
     let bestDist = radius;
     for (const s of this.structures) {
-      if (s.kind !== 'wall') continue;
-      for (const p of s.points) {
+      if (s.kind !== 'wallSection') continue;
+      for (const p of [s.a, s.b]) {
         const d = Phaser.Math.Distance.Between(x, y, p.x, p.y);
         if (d < bestDist) {
           bestDist = d;
@@ -112,40 +147,36 @@ export class BuildSystem {
   }
 
   /**
-   * Nearest point along any existing wall (not just vertices), within
-   * range. Towers/gates require this to be non-null: they can only be
-   * built on a wall, never freestanding.
+   * Nearest point along any existing wall section (not just endpoints),
+   * within range. Towers/gates require this to be non-null: they can
+   * only be built on a wall, never freestanding.
    */
   snapToWallLine(x: number, y: number, radius = STRUCTURE_SNAP_RADIUS): Point | null {
     let best: Point | null = null;
     let bestDist = radius;
     for (const s of this.structures) {
-      if (s.kind !== 'wall') continue;
-      for (let i = 0; i < s.points.length - 1; i++) {
-        const proj = closestPointOnSegment({ x, y }, s.points[i], s.points[i + 1]);
-        const d = Phaser.Math.Distance.Between(x, y, proj.x, proj.y);
-        if (d < bestDist) {
-          bestDist = d;
-          best = proj;
-        }
+      if (s.kind !== 'wallSection') continue;
+      const proj = closestPointOnSegment({ x, y }, s.a, s.b);
+      const d = Phaser.Math.Distance.Between(x, y, proj.x, proj.y);
+      if (d < bestDist) {
+        bestDist = d;
+        best = proj;
       }
     }
     return best;
   }
 
   /** Same as snapToWallLine but with no range cap, for enemy AI targeting. */
-  nearestWallPoint(x: number, y: number): { point: Point; wall: WallPath } | null {
-    let best: { point: Point; wall: WallPath } | null = null;
+  nearestWallPoint(x: number, y: number): { point: Point; wall: WallSection } | null {
+    let best: { point: Point; wall: WallSection } | null = null;
     let bestDist = Infinity;
     for (const s of this.structures) {
-      if (s.kind !== 'wall') continue;
-      for (let i = 0; i < s.points.length - 1; i++) {
-        const proj = closestPointOnSegment({ x, y }, s.points[i], s.points[i + 1]);
-        const d = Phaser.Math.Distance.Between(x, y, proj.x, proj.y);
-        if (d < bestDist) {
-          bestDist = d;
-          best = { point: proj, wall: s };
-        }
+      if (s.kind !== 'wallSection') continue;
+      const proj = closestPointOnSegment({ x, y }, s.a, s.b);
+      const d = Phaser.Math.Distance.Between(x, y, proj.x, proj.y);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { point: proj, wall: s };
       }
     }
     return best;
@@ -154,8 +185,11 @@ export class BuildSystem {
   addWallPath(points: Point[]) {
     if (points.length < 2) return;
     if (points.some((p) => !this.isBuildable(p.x, p.y))) return;
-    const maxHp = WALL_BASE_HP + (pathLength(points) / 100) * WALL_HP_PER_100PX;
-    this.structures.push({ kind: 'wall', points, hp: maxHp, maxHp });
+    for (const chunk of splitIntoSections(points, SECTION_LENGTH)) {
+      const len = Phaser.Math.Distance.Between(chunk.a.x, chunk.a.y, chunk.b.x, chunk.b.y);
+      const maxHp = Math.max(20, WALL_SECTION_MAX_HP * (len / SECTION_LENGTH));
+      this.structures.push({ kind: 'wallSection', a: chunk.a, b: chunk.b, hp: maxHp, maxHp });
+    }
     this.render();
   }
 
@@ -199,25 +233,41 @@ export class BuildSystem {
   render() {
     this.graphics.clear();
     for (const s of this.structures) {
-      const damageFrac = 1 - s.hp / s.maxHp;
-      if (s.kind === 'wall') {
+      const hpFrac = Phaser.Math.Clamp(s.hp / s.maxHp, 0, 1);
+      const damageFrac = 1 - hpFrac;
+      if (s.kind === 'wallSection') {
         const color = lerpColor(WALL_COLOR, DAMAGE_COLOR, damageFrac);
-        strokeThickPath(this.graphics, s.points, color, WALL_WIDTH, 1);
-        strokeThickPath(this.graphics, s.points, lerpColor(WALL_CORE_COLOR, DAMAGE_COLOR, damageFrac), WALL_WIDTH * 0.55, 1);
+        strokeThickPath(this.graphics, [s.a, s.b], color, WALL_WIDTH, 1);
+        strokeThickPath(this.graphics, [s.a, s.b], lerpColor(WALL_CORE_COLOR, DAMAGE_COLOR, damageFrac), WALL_WIDTH * 0.55, 1);
+        this.drawHitBar(s.a.x + (s.b.x - s.a.x) / 2, Math.min(s.a.y, s.b.y) - HITBAR_GAP, hpFrac);
       } else if (s.kind === 'tower') {
         const color = lerpColor(TOWER_COLOR, DAMAGE_COLOR, damageFrac);
         this.graphics.fillStyle(color, 1);
         this.graphics.fillCircle(s.x, s.y, TOWER_RADIUS);
         this.graphics.lineStyle(3, 0x231f1a, 1);
         this.graphics.strokeCircle(s.x, s.y, TOWER_RADIUS);
+        this.drawHitBar(s.x, s.y - TOWER_RADIUS - HITBAR_GAP, hpFrac);
       } else {
         const color = lerpColor(GATE_COLOR, DAMAGE_COLOR, damageFrac);
         this.graphics.fillStyle(color, 1);
         this.graphics.fillRect(s.x - GATE_SIZE / 2, s.y - GATE_SIZE / 2, GATE_SIZE, GATE_SIZE);
         this.graphics.lineStyle(3, 0x231f1a, 1);
         this.graphics.strokeRect(s.x - GATE_SIZE / 2, s.y - GATE_SIZE / 2, GATE_SIZE, GATE_SIZE);
+        this.drawHitBar(s.x, s.y - GATE_SIZE / 2 - HITBAR_GAP, hpFrac);
       }
     }
+  }
+
+  private drawHitBar(centerX: number, bottomY: number, hpFrac: number) {
+    const x = centerX - HITBAR_WIDTH / 2;
+    const y = bottomY - HITBAR_HEIGHT;
+    this.graphics.fillStyle(0x1a1512, 0.95);
+    this.graphics.fillRect(x, y, HITBAR_WIDTH, HITBAR_HEIGHT);
+    this.graphics.lineStyle(1, 0x000000, 0.6);
+    this.graphics.strokeRect(x, y, HITBAR_WIDTH, HITBAR_HEIGHT);
+    const fillColor = hpFrac > 0.5 ? 0x6a9c4a : hpFrac > 0.25 ? 0xc19a3e : 0xb0392f;
+    this.graphics.fillStyle(fillColor, 1);
+    this.graphics.fillRect(x + 1, y + 1, Math.max(0, HITBAR_WIDTH - 2) * hpFrac, HITBAR_HEIGHT - 2);
   }
 }
 

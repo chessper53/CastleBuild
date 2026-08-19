@@ -1,5 +1,5 @@
 export type ToolType = 'none' | 'wall' | 'tower' | 'gate';
-export type Phase = 'build' | 'combat' | 'gameover';
+export type Phase = 'placement' | 'build' | 'combat' | 'gameover';
 
 export interface GameStatePayload {
   phase: Phase;

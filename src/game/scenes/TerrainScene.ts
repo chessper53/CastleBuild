@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { generateTerrain, BIOME_COLOR, type TerrainMap } from '../systems/terrainGenerator';
 import { BuildSystem, type Point } from '../systems/buildSystem';
-import { CombatSystem } from '../systems/combatSystem';
+import { CombatSystem, KEEP_SIZE } from '../systems/combatSystem';
 import { onSetTool, setTool, onStartRound, publishGameState, type ToolType, type Phase } from '../events';
 
 const TARGET_CELL_COUNT = 256 * 256; // total detail budget, split between axes to match screen aspect
@@ -10,25 +10,29 @@ const MAX_MAP_CELLS = 420;
 const CELL_SIZE = 10;
 const MIN_WALL_POINTS = 2;
 const MIN_POINT_SPACING = 10; // world px between recorded points while freehand-drawing a wall
+const TAP_THRESHOLD = 8; // screen px of movement below which a pointerdown/up pair counts as a tap, not a drag
 const SOLDIERS_MAX = 50;
 const STATE_PUBLISH_INTERVAL = 0.1;
+const PLACEMENT_VALID_COLOR = 0xd9c27e;
+const PLACEMENT_INVALID_COLOR = 0xb0392f;
 
 export class TerrainScene extends Phaser.Scene {
   private terrain!: TerrainMap;
   private buildSystem!: BuildSystem;
-  private combatSystem!: CombatSystem;
+  private combatSystem: CombatSystem | null = null;
   private previewGraphics!: Phaser.GameObjects.Graphics;
   private worldWidth = 0;
   private worldHeight = 0;
   private minZoom = 0.2;
 
-  private phase: Phase = 'build';
+  private phase: Phase = 'placement';
   private round = 1;
   private statePublishTimer = 0;
 
   private activeTool: ToolType = 'none';
   private isPanning = false;
   private panStart = new Phaser.Math.Vector2();
+  private pointerDownScreen = new Phaser.Math.Vector2();
   private cameraStart = new Phaser.Math.Vector2();
   private pinchDistance = 0;
   private wallPoints: Point[] = [];
@@ -49,11 +53,6 @@ export class TerrainScene extends Phaser.Scene {
     this.buildSystem = new BuildSystem(this, this.terrain, CELL_SIZE);
     this.previewGraphics = this.add.graphics();
 
-    const keepPos = this.findKeepPosition();
-    this.combatSystem = new CombatSystem(this, this.buildSystem, keepPos, this.worldWidth, this.worldHeight);
-    this.combatSystem.stationSoldiers(SOLDIERS_MAX);
-    this.combatSystem.update(0);
-
     this.setupCamera();
     this.setupInput();
 
@@ -67,7 +66,7 @@ export class TerrainScene extends Phaser.Scene {
     });
 
     onStartRound(() => {
-      if (this.phase !== 'build') return;
+      if (this.phase !== 'build' || !this.combatSystem) return;
       this.activeTool = 'none';
       setTool('none');
       this.combatSystem.stationSoldiers(SOLDIERS_MAX);
@@ -80,7 +79,7 @@ export class TerrainScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number) {
-    if (this.phase !== 'combat') return;
+    if (this.phase !== 'combat' || !this.combatSystem) return;
     const dt = delta / 1000;
     this.combatSystem.update(dt);
 
@@ -107,34 +106,33 @@ export class TerrainScene extends Phaser.Scene {
     publishGameState({
       phase: this.phase,
       round: this.round,
-      keepHp: this.combatSystem.keepHp,
-      keepMaxHp: this.combatSystem.keepMaxHp,
+      keepHp: this.combatSystem?.keepHp ?? 100,
+      keepMaxHp: this.combatSystem?.keepMaxHp ?? 100,
       soldiersAlive: SOLDIERS_MAX,
       soldiersMax: SOLDIERS_MAX,
-      enemiesRemaining: this.combatSystem.enemiesRemaining,
+      enemiesRemaining: this.combatSystem?.enemiesRemaining ?? 0,
     });
   }
 
-  // Spirals outward from the map center to find a buildable (non-water)
-  // cell for the keep, since the exact center can land in a lake.
-  private findKeepPosition(): Point {
-    const cx = Math.floor(this.terrain.width / 2);
-    const cy = Math.floor(this.terrain.height / 2);
-    const maxRadius = Math.max(this.terrain.width, this.terrain.height);
-    for (let r = 0; r < maxRadius; r++) {
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) {
-          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-          const gx = cx + dx;
-          const gy = cy + dy;
-          if (gx < 0 || gy < 0 || gx >= this.terrain.width || gy >= this.terrain.height) continue;
-          const worldX = gx * CELL_SIZE + CELL_SIZE / 2;
-          const worldY = gy * CELL_SIZE + CELL_SIZE / 2;
-          if (this.buildSystem.isBuildable(worldX, worldY)) return { x: worldX, y: worldY };
-        }
-      }
-    }
-    return { x: this.worldWidth / 2, y: this.worldHeight / 2 };
+  private placeKeep(point: Point) {
+    this.combatSystem = new CombatSystem(this, this.buildSystem, point, this.worldWidth, this.worldHeight);
+    this.combatSystem.stationSoldiers(SOLDIERS_MAX);
+    this.combatSystem.update(0);
+    this.phase = 'build';
+    this.previewGraphics.clear();
+    this.publishState();
+  }
+
+  private drawKeepPlacementPreview(p: Point, valid: boolean) {
+    this.previewGraphics.clear();
+    const color = valid ? PLACEMENT_VALID_COLOR : PLACEMENT_INVALID_COLOR;
+    this.previewGraphics.lineStyle(3, color, 0.85);
+    this.previewGraphics.strokeRect(p.x - KEEP_SIZE / 2, p.y - KEEP_SIZE / 2, KEEP_SIZE, KEEP_SIZE);
+    this.previewGraphics.strokeTriangle(
+      p.x - KEEP_SIZE / 2 - 4, p.y - KEEP_SIZE / 2,
+      p.x + KEEP_SIZE / 2 + 4, p.y - KEEP_SIZE / 2,
+      p.x, p.y - KEEP_SIZE / 2 - 22,
+    );
   }
 
   private renderTerrain() {
@@ -194,6 +192,8 @@ export class TerrainScene extends Phaser.Scene {
         return;
       }
 
+      this.pointerDownScreen.set(pointer.x, pointer.y);
+
       const buildAllowed = this.phase === 'build';
       const world = cam.getWorldPoint(pointer.x, pointer.y);
 
@@ -232,6 +232,11 @@ export class TerrainScene extends Phaser.Scene {
       }
       this.pinchDistance = 0;
 
+      if (this.phase === 'placement') {
+        const world = cam.getWorldPoint(pointer.x, pointer.y);
+        this.drawKeepPlacementPreview(world, this.buildSystem.isBuildable(world.x, world.y));
+      }
+
       const buildAllowed = this.phase === 'build';
 
       if (this.activeTool === 'none' || !buildAllowed) {
@@ -269,6 +274,17 @@ export class TerrainScene extends Phaser.Scene {
     this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
       this.isPanning = false;
       this.pinchDistance = 0;
+
+      if (this.phase === 'placement') {
+        const dragDist = Phaser.Math.Distance.Between(
+          this.pointerDownScreen.x, this.pointerDownScreen.y, pointer.x, pointer.y,
+        );
+        if (dragDist < TAP_THRESHOLD) {
+          const world = cam.getWorldPoint(pointer.x, pointer.y);
+          if (this.buildSystem.isBuildable(world.x, world.y)) this.placeKeep(world);
+        }
+        return;
+      }
 
       if (this.phase === 'build' && this.activeTool === 'wall' && this.isDrawingWall) {
         const world = cam.getWorldPoint(pointer.x, pointer.y);

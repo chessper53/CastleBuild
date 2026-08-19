@@ -1,9 +1,9 @@
 import Phaser from 'phaser';
-import { BuildSystem, type Point, type PointStructure, type WallPath } from './buildSystem';
+import { BuildSystem, type Point, type PointStructure, type WallSection } from './buildSystem';
 
 interface WallTarget {
   type: 'wall';
-  wall: WallPath;
+  wall: WallSection;
   point: Point;
 }
 interface KeepTarget {
@@ -21,6 +21,7 @@ interface Enemy {
   target: EnemyTarget;
   attackCooldown: number;
   state: 'moving' | 'attacking';
+  avoidBias: number; // -1 or 1, keeps obstacle-avoidance turns consistent instead of jittering
 }
 
 interface Soldier {
@@ -33,7 +34,6 @@ interface Soldier {
   bonus: boolean; // stationed at a tower
 }
 
-const SOLDIER_SPACING = 46;
 const SOLDIER_RANGE = 72;
 const SOLDIER_BONUS_RANGE = 96;
 const SOLDIER_DAMAGE = 9;
@@ -56,7 +56,7 @@ const SOLDIER_COLOR = 0x3a5a8a;
 const SOLDIER_DARK = 0x16233a;
 const FIGURE_RADIUS = 7;
 
-const KEEP_SIZE = 42;
+export const KEEP_SIZE = 42;
 const KEEP_WALL_COLOR = 0x4a4238;
 const KEEP_ROOF_COLOR = 0x7a3a2a;
 
@@ -93,12 +93,17 @@ export class CombatSystem {
     return this.enemies.length;
   }
 
-  /** Distributes up to maxSoldiers along built walls (with a bonus garrison at towers), defaulting to guarding the keep if nothing is built. */
+  /**
+   * Distributes up to maxSoldiers one-per-wall-section (with a
+   * stronger garrison at towers). Soldiers only exist where you've
+   * actually built - nothing built means nothing defended, so there's
+   * no free defensive perimeter around the keep.
+   */
   stationSoldiers(maxSoldiers: number) {
     this.soldiers = [];
     const structures = this.buildSystem.getStructures();
     const towers = structures.filter((s): s is PointStructure => s.kind === 'tower');
-    const walls = structures.filter((s): s is WallPath => s.kind === 'wall');
+    const sections = structures.filter((s): s is WallSection => s.kind === 'wallSection');
 
     for (const t of towers) {
       if (this.soldiers.length >= maxSoldiers) break;
@@ -113,49 +118,17 @@ export class CombatSystem {
       });
     }
 
-    const wallPoints: Point[] = [];
-    for (const w of walls) {
-      let carry = 0;
-      for (let i = 1; i < w.points.length; i++) {
-        const a = w.points[i - 1];
-        const b = w.points[i];
-        const segLen = Phaser.Math.Distance.Between(a.x, a.y, b.x, b.y);
-        let d = carry;
-        while (d < segLen) {
-          const t = d / segLen;
-          wallPoints.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
-          d += SOLDIER_SPACING;
-        }
-        carry = d - segLen;
-      }
-    }
-    for (const p of wallPoints) {
+    for (const s of sections) {
       if (this.soldiers.length >= maxSoldiers) break;
       this.soldiers.push({
-        x: p.x,
-        y: p.y,
+        x: s.a.x + (s.b.x - s.a.x) / 2,
+        y: s.a.y + (s.b.y - s.a.y) / 2,
         range: SOLDIER_RANGE,
         damage: SOLDIER_DAMAGE,
         attackCooldown: 0,
         attackInterval: SOLDIER_ATTACK_INTERVAL,
         bonus: false,
       });
-    }
-
-    if (this.soldiers.length === 0) {
-      const guardSpots = 8;
-      for (let i = 0; i < Math.min(guardSpots, maxSoldiers); i++) {
-        const angle = (i / guardSpots) * Math.PI * 2;
-        this.soldiers.push({
-          x: this.keep.x + Math.cos(angle) * KEEP_SIZE,
-          y: this.keep.y + Math.sin(angle) * KEEP_SIZE,
-          range: SOLDIER_RANGE,
-          damage: SOLDIER_DAMAGE,
-          attackCooldown: 0,
-          attackInterval: SOLDIER_ATTACK_INTERVAL,
-          bonus: false,
-        });
-      }
     }
   }
 
@@ -175,6 +148,7 @@ export class CombatSystem {
         target,
         attackCooldown: 0,
         state: 'moving',
+        avoidBias: this.rng() < 0.5 ? 1 : -1,
       });
     }
   }
@@ -198,6 +172,28 @@ export class CombatSystem {
     const nearest = this.buildSystem.nearestWallPoint(x, y);
     if (nearest) return { type: 'wall', wall: nearest.wall, point: nearest.point };
     return { type: 'keep', point: this.keep };
+  }
+
+  // No pathfinding grid - instead, try the direct line to the target
+  // first, then widen the swing (always toward the enemy's own bias so
+  // it doesn't jitter) until a walkable step is found. Cheap "whisker"
+  // steering that's enough to walk around a lake instead of through it.
+  private stepToward(enemy: Enemy, target: Point, dt: number) {
+    const baseAngle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
+    const stepLen = enemy.speed * dt;
+    const sign = enemy.avoidBias;
+    const offsets = [0, 0.4, -0.4, 0.8, -0.8, 1.3, -1.3, 2.0, -2.0];
+    for (const offset of offsets) {
+      const angle = baseAngle + offset * sign;
+      const nx = enemy.x + Math.cos(angle) * stepLen;
+      const ny = enemy.y + Math.sin(angle) * stepLen;
+      if (this.buildSystem.isBuildable(nx, ny)) {
+        enemy.x = nx;
+        enemy.y = ny;
+        return;
+      }
+    }
+    // Boxed in on all tried headings this frame - hold position rather than clip into water.
   }
 
   update(dt: number) {
@@ -229,11 +225,7 @@ export class CombatSystem {
         }
       } else {
         enemy.state = 'moving';
-        const dx = targetPoint.x - enemy.x;
-        const dy = targetPoint.y - enemy.y;
-        const len = Math.hypot(dx, dy) || 1;
-        enemy.x += (dx / len) * enemy.speed * dt;
-        enemy.y += (dy / len) * enemy.speed * dt;
+        this.stepToward(enemy, targetPoint, dt);
       }
     }
 

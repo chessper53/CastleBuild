@@ -90,7 +90,7 @@ export function setupHud() {
   document.body.appendChild(root);
 
   onGameState((state: GameStatePayload) => {
-    roundLabel.textContent = `Round ${state.round}`;
+    roundLabel.textContent = state.phase === 'placement' ? 'Choose Your Site' : `Round ${state.round}`;
     soldiersCount.textContent = String(state.soldiersAlive);
 
     const buildAllowed = state.phase === 'build';
@@ -98,18 +98,23 @@ export function setupHud() {
       b.classList.toggle('disabled', !buildAllowed);
       (b as HTMLButtonElement).disabled = !buildAllowed;
     }
+    bottom.style.display = state.phase === 'placement' ? 'none' : '';
 
-    if (state.phase === 'build') {
+    overlay.classList.remove('visible');
+
+    if (state.phase === 'placement') {
+      statusText.textContent = 'Tap a spot on the map to found your keep';
+      keepBarTrack.style.display = 'none';
+      startRoundBtn.style.display = 'none';
+    } else if (state.phase === 'build') {
       statusText.textContent = 'Raise your defenses';
       keepBarTrack.style.display = 'none';
       startRoundBtn.style.display = '';
-      overlay.classList.remove('visible');
     } else if (state.phase === 'combat') {
       statusText.textContent = `Wave ${state.round} — ${state.enemiesRemaining} enem${state.enemiesRemaining === 1 ? 'y' : 'ies'} remaining`;
       keepBarTrack.style.display = '';
       keepBarFill.style.width = `${Math.max(0, (state.keepHp / state.keepMaxHp) * 100)}%`;
       startRoundBtn.style.display = 'none';
-      overlay.classList.remove('visible');
     } else {
       overlayRound.textContent = String(Math.max(1, state.round - 1));
       overlay.classList.add('visible');
