@@ -34,14 +34,11 @@ const UNBUILDABLE_BIOMES = new Set<Biome>([Biome.Water]);
 // scales interact.
 const SCALE = 1.5;
 
-const WALL_TEXTURE_KEY = 'ui-icon-wall';
 const TOWER_TEXTURE_KEY = 'ui-icon-tower';
-// Matches ui-icon-wall's own viewBox aspect ratio - used to tile a
-// wall segment with roughly-square-looking repeats instead of
-// stretching one image across the whole length.
-const WALL_TILE_ASPECT = 130 / 100;
 const DAMAGE_TINT = 0x8a332a;
 
+const WALL_COLOR = 0x8a8a82;
+const WALL_CORE_COLOR = 0xa8a89c;
 const WALL_WIDTH = 24 * SCALE;
 const TOWER_RADIUS = 22 * SCALE;
 const GATE_COLOR = 0x8a5a2b;
@@ -328,14 +325,15 @@ export class BuildSystem {
   render() {
     this.graphics.clear();
     this.structureImageCount = 0;
-    const wallTextureReady = this.scene.textures.exists(WALL_TEXTURE_KEY);
     const towerTextureReady = this.scene.textures.exists(TOWER_TEXTURE_KEY);
 
     for (const s of this.structures) {
       const hpFrac = Phaser.Math.Clamp(s.hp / s.maxHp, 0, 1);
       const damageFrac = 1 - hpFrac;
       if (s.kind === 'wallSection') {
-        if (wallTextureReady) this.renderWallSection(s, damageFrac);
+        const color = lerpColor(WALL_COLOR, DAMAGE_COLOR, damageFrac);
+        strokeThickPath(this.graphics, [s.a, s.b], color, WALL_WIDTH, 1);
+        strokeThickPath(this.graphics, [s.a, s.b], lerpColor(WALL_CORE_COLOR, DAMAGE_COLOR, damageFrac), WALL_WIDTH * 0.55, 1);
         this.drawHitBar(s.a.x + (s.b.x - s.a.x) / 2, Math.min(s.a.y, s.b.y) - HITBAR_GAP, hpFrac);
       } else if (s.kind === 'tower') {
         if (towerTextureReady) this.renderTower(s, damageFrac);
@@ -352,32 +350,6 @@ export class BuildSystem {
 
     for (let i = this.structureImageCount; i < this.structureImagePool.length; i++) {
       this.structureImagePool[i].setVisible(false);
-    }
-  }
-
-  // Tiles the wall glyph along the section instead of stretching one
-  // copy across the whole length - a single stretched image would
-  // squash the crenellations at anything but exactly the icon's own
-  // aspect ratio.
-  private renderWallSection(s: WallSection, damageFrac: number) {
-    const len = Phaser.Math.Distance.Between(s.a.x, s.a.y, s.b.x, s.b.y);
-    if (len < 1) return;
-    const angle = Math.atan2(s.b.y - s.a.y, s.b.x - s.a.x);
-    const idealTileWidth = WALL_WIDTH * WALL_TILE_ASPECT;
-    const tileCount = Math.max(1, Math.round(len / idealTileWidth));
-    const tileWidth = len / tileCount;
-    const tint = lerpColor(0xffffff, DAMAGE_TINT, damageFrac);
-
-    for (let i = 0; i < tileCount; i++) {
-      const t = (i + 0.5) / tileCount;
-      const img = this.getStructureImage();
-      img.setTexture(WALL_TEXTURE_KEY);
-      img.setPosition(s.a.x + (s.b.x - s.a.x) * t, s.a.y + (s.b.y - s.a.y) * t);
-      img.setRotation(angle);
-      // Slight overlap so adjacent tiles don't show a seam at the join.
-      img.setDisplaySize(tileWidth * 1.06, WALL_WIDTH);
-      img.setTint(tint);
-      img.setVisible(true);
     }
   }
 

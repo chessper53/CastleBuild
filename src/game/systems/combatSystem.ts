@@ -98,6 +98,7 @@ const SPAWN_INTERVAL_START_DAYS = 0.35; // gap between packs right when the enca
 const SPAWN_INTERVAL_MIN_DAYS = 0.08; // floor - sieges never get faster than this no matter how long they run
 const SPAWN_INTERVAL_RAMP_DAYS = 0.018; // interval shrinks by this many days for each day survived past activation
 const ENCAMPMENT_SPAWN_JITTER = 55 * SCALE; // packs spawn near the encampment, not stacked exactly on it
+const ENCAMPMENT_EDGE_INSET = 0.1; // fraction of world width/height kept clear of the literal map border
 
 // Power tier per troop type (reused from the old unlock ordering).
 // Spawn weighting (pickTroopType) peaks around whichever tier matches
@@ -304,14 +305,45 @@ export class CombatSystem {
     let best: Point | null = null;
     let bestDist = -1;
     for (let i = 0; i < 10; i++) {
-      const p = this.randomEdgePoint();
+      const p = this.randomInsetEdgePoint();
       const d = Phaser.Math.Distance.Between(p.x, p.y, this.keep.x, this.keep.y);
       if (d > bestDist) {
         bestDist = d;
         best = p;
       }
     }
-    return best ?? { x: this.worldWidth / 2, y: 0 };
+    return best ?? { x: this.worldWidth * ENCAMPMENT_EDGE_INSET, y: this.worldHeight * ENCAMPMENT_EDGE_INSET };
+  }
+
+  // Kept well inside the map border, not right on the literal edge -
+  // the camera's default view crops a couple percent off each edge to
+  // guarantee full-bleed coverage (see TerrainScene's recalcMinZoom),
+  // so a point placed exactly at the border can end up just outside
+  // the visible frame. Still reads as "a distant enemy camp" from this
+  // far in, just one the player can actually find on screen.
+  private randomInsetEdgePoint(): Point {
+    const marginX = this.worldWidth * ENCAMPMENT_EDGE_INSET;
+    const marginY = this.worldHeight * ENCAMPMENT_EDGE_INSET;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const side = Math.floor(this.rng() * 4);
+      let p: Point;
+      switch (side) {
+        case 0:
+          p = { x: marginX + this.rng() * (this.worldWidth - marginX * 2), y: marginY };
+          break;
+        case 1:
+          p = { x: this.worldWidth - marginX, y: marginY + this.rng() * (this.worldHeight - marginY * 2) };
+          break;
+        case 2:
+          p = { x: marginX + this.rng() * (this.worldWidth - marginX * 2), y: this.worldHeight - marginY };
+          break;
+        default:
+          p = { x: marginX, y: marginY + this.rng() * (this.worldHeight - marginY * 2) };
+          break;
+      }
+      if (this.buildSystem.isBuildable(p.x, p.y)) return p;
+    }
+    return { x: marginX, y: marginY };
   }
 
   private pickTroopType(effectiveDay: number): TroopType {
@@ -359,37 +391,6 @@ export class CombatSystem {
       if (this.buildSystem.isBuildable(x, y)) return { x, y };
     }
     return { ...this.encampment };
-  }
-
-  // The map border isn't guaranteed to be land - it can dip through a
-  // lake. Spawning there would drop an enemy in water with no walkable
-  // direction for its whisker-steering to find, freezing it in place
-  // forever. Retry until we land on solid ground.
-  private randomEdgePoint(): Point {
-    for (let attempt = 0; attempt < 50; attempt++) {
-      const p = this.rawEdgePoint();
-      if (this.buildSystem.isBuildable(p.x, p.y)) return p;
-    }
-    let p: Point = { x: this.worldWidth / 2, y: 0 };
-    while (!this.buildSystem.isBuildable(p.x, p.y) && p.y < this.worldHeight) {
-      p = { x: p.x, y: p.y + 20 };
-    }
-    return p;
-  }
-
-  private rawEdgePoint(): Point {
-    const side = Math.floor(this.rng() * 4);
-    const margin = 4;
-    switch (side) {
-      case 0:
-        return { x: this.rng() * this.worldWidth, y: margin };
-      case 1:
-        return { x: this.worldWidth - margin, y: this.rng() * this.worldHeight };
-      case 2:
-        return { x: this.rng() * this.worldWidth, y: this.worldHeight - margin };
-      default:
-        return { x: margin, y: this.rng() * this.worldHeight };
-    }
   }
 
   private acquireTarget(x: number, y: number): EnemyTarget {
