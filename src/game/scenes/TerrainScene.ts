@@ -1,7 +1,8 @@
 import Phaser from 'phaser';
 import { generateTerrain, BIOME_COLOR, type TerrainMap } from '../systems/terrainGenerator';
 import { BuildSystem, type Point } from '../systems/buildSystem';
-import { onSetTool, type ToolType } from '../events';
+import { CombatSystem } from '../systems/combatSystem';
+import { onSetTool, setTool, onStartRound, publishGameState, type ToolType, type Phase } from '../events';
 
 const TARGET_CELL_COUNT = 256 * 256; // total detail budget, split between axes to match screen aspect
 const MIN_MAP_CELLS = 96;
@@ -9,14 +10,21 @@ const MAX_MAP_CELLS = 420;
 const CELL_SIZE = 10;
 const MIN_WALL_POINTS = 2;
 const MIN_POINT_SPACING = 10; // world px between recorded points while freehand-drawing a wall
+const SOLDIERS_MAX = 50;
+const STATE_PUBLISH_INTERVAL = 0.1;
 
 export class TerrainScene extends Phaser.Scene {
   private terrain!: TerrainMap;
   private buildSystem!: BuildSystem;
+  private combatSystem!: CombatSystem;
   private previewGraphics!: Phaser.GameObjects.Graphics;
   private worldWidth = 0;
   private worldHeight = 0;
   private minZoom = 0.2;
+
+  private phase: Phase = 'build';
+  private round = 1;
+  private statePublishTimer = 0;
 
   private activeTool: ToolType = 'none';
   private isPanning = false;
@@ -41,6 +49,11 @@ export class TerrainScene extends Phaser.Scene {
     this.buildSystem = new BuildSystem(this, this.terrain, CELL_SIZE);
     this.previewGraphics = this.add.graphics();
 
+    const keepPos = this.findKeepPosition();
+    this.combatSystem = new CombatSystem(this, this.buildSystem, keepPos, this.worldWidth, this.worldHeight);
+    this.combatSystem.stationSoldiers(SOLDIERS_MAX);
+    this.combatSystem.update(0);
+
     this.setupCamera();
     this.setupInput();
 
@@ -52,6 +65,76 @@ export class TerrainScene extends Phaser.Scene {
       this.isDrawingWall = false;
       this.previewGraphics.clear();
     });
+
+    onStartRound(() => {
+      if (this.phase !== 'build') return;
+      this.activeTool = 'none';
+      setTool('none');
+      this.combatSystem.stationSoldiers(SOLDIERS_MAX);
+      this.combatSystem.spawnWave(this.round);
+      this.phase = 'combat';
+      this.publishState();
+    });
+
+    this.publishState();
+  }
+
+  update(_time: number, delta: number) {
+    if (this.phase !== 'combat') return;
+    const dt = delta / 1000;
+    this.combatSystem.update(dt);
+
+    this.statePublishTimer += dt;
+    if (this.statePublishTimer >= STATE_PUBLISH_INTERVAL) {
+      this.statePublishTimer = 0;
+      this.publishState();
+    }
+
+    if (this.combatSystem.keepHp <= 0) {
+      this.phase = 'gameover';
+      this.publishState();
+      return;
+    }
+
+    if (this.combatSystem.enemiesRemaining === 0) {
+      this.phase = 'build';
+      this.round += 1;
+      this.publishState();
+    }
+  }
+
+  private publishState() {
+    publishGameState({
+      phase: this.phase,
+      round: this.round,
+      keepHp: this.combatSystem.keepHp,
+      keepMaxHp: this.combatSystem.keepMaxHp,
+      soldiersAlive: SOLDIERS_MAX,
+      soldiersMax: SOLDIERS_MAX,
+      enemiesRemaining: this.combatSystem.enemiesRemaining,
+    });
+  }
+
+  // Spirals outward from the map center to find a buildable (non-water)
+  // cell for the keep, since the exact center can land in a lake.
+  private findKeepPosition(): Point {
+    const cx = Math.floor(this.terrain.width / 2);
+    const cy = Math.floor(this.terrain.height / 2);
+    const maxRadius = Math.max(this.terrain.width, this.terrain.height);
+    for (let r = 0; r < maxRadius; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          const gx = cx + dx;
+          const gy = cy + dy;
+          if (gx < 0 || gy < 0 || gx >= this.terrain.width || gy >= this.terrain.height) continue;
+          const worldX = gx * CELL_SIZE + CELL_SIZE / 2;
+          const worldY = gy * CELL_SIZE + CELL_SIZE / 2;
+          if (this.buildSystem.isBuildable(worldX, worldY)) return { x: worldX, y: worldY };
+        }
+      }
+    }
+    return { x: this.worldWidth / 2, y: this.worldHeight / 2 };
   }
 
   private renderTerrain() {
@@ -111,9 +194,10 @@ export class TerrainScene extends Phaser.Scene {
         return;
       }
 
+      const buildAllowed = this.phase === 'build';
       const world = cam.getWorldPoint(pointer.x, pointer.y);
 
-      if (this.activeTool === 'none') {
+      if (this.activeTool === 'none' || !buildAllowed) {
         this.isPanning = true;
         this.panStart.set(pointer.x, pointer.y);
         this.cameraStart.set(cam.scrollX, cam.scrollY);
@@ -148,7 +232,9 @@ export class TerrainScene extends Phaser.Scene {
       }
       this.pinchDistance = 0;
 
-      if (this.activeTool === 'none') {
+      const buildAllowed = this.phase === 'build';
+
+      if (this.activeTool === 'none' || !buildAllowed) {
         if (!this.isPanning) return;
         const dx = (pointer.x - this.panStart.x) / cam.zoom;
         const dy = (pointer.y - this.panStart.y) / cam.zoom;
@@ -184,7 +270,7 @@ export class TerrainScene extends Phaser.Scene {
       this.isPanning = false;
       this.pinchDistance = 0;
 
-      if (this.activeTool === 'wall' && this.isDrawingWall) {
+      if (this.phase === 'build' && this.activeTool === 'wall' && this.isDrawingWall) {
         const world = cam.getWorldPoint(pointer.x, pointer.y);
         const snappedEnd = this.buildSystem.snapToWallVertex(world.x, world.y);
         this.wallPoints.push(snappedEnd);

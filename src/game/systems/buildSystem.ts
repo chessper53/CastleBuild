@@ -9,12 +9,16 @@ export interface Point {
 export interface WallPath {
   kind: 'wall';
   points: Point[];
+  hp: number;
+  maxHp: number;
 }
 
 export interface PointStructure {
   kind: 'tower' | 'gate';
   x: number;
   y: number;
+  hp: number;
+  maxHp: number;
 }
 
 export type Structure = WallPath | PointStructure;
@@ -30,6 +34,12 @@ const GATE_COLOR = 0x8a5a2b;
 const GATE_SIZE = 28;
 const INVALID_COLOR = 0xb0392f;
 const VALID_COLOR = 0xd9c27e;
+const DAMAGE_COLOR = 0x7a2a20;
+
+const WALL_HP_PER_100PX = 45;
+const WALL_BASE_HP = 60;
+const TOWER_MAX_HP = 180;
+const GATE_MAX_HP = 90;
 
 export const WALL_SNAP_RADIUS = 30; // wall endpoints snap to other wall vertices within this range
 export const STRUCTURE_SNAP_RADIUS = 34; // towers/gates snap onto the nearest wall within this range
@@ -42,6 +52,23 @@ function closestPointOnSegment(p: Point, a: Point, b: Point): Point {
   let t = ((p.x - a.x) * abx + (p.y - a.y) * aby) / lenSq;
   t = Phaser.Math.Clamp(t, 0, 1);
   return { x: a.x + abx * t, y: a.y + aby * t };
+}
+
+function pathLength(points: Point[]): number {
+  let len = 0;
+  for (let i = 1; i < points.length; i++) {
+    len += Phaser.Math.Distance.Between(points[i - 1].x, points[i - 1].y, points[i].x, points[i].y);
+  }
+  return len;
+}
+
+function lerpColor(a: number, b: number, t: number): number {
+  const ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
+  const br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
+  const r = Math.round(ar + (br - ar) * t);
+  const g = Math.round(ag + (bg - ag) * t);
+  const bl = Math.round(ab + (bb - ab) * t);
+  return (r << 16) | (g << 8) | bl;
 }
 
 export class BuildSystem {
@@ -61,6 +88,10 @@ export class BuildSystem {
     const cy = Math.floor(worldY / this.cellSize);
     if (cx < 0 || cy < 0 || cx >= this.terrain.width || cy >= this.terrain.height) return false;
     return !UNBUILDABLE_BIOMES.has(this.terrain.get(cx, cy).biome);
+  }
+
+  getStructures(): readonly Structure[] {
+    return this.structures;
   }
 
   /** Snaps to the nearest existing wall vertex, for connecting new wall paths to old ones. */
@@ -102,16 +133,48 @@ export class BuildSystem {
     return best;
   }
 
+  /** Same as snapToWallLine but with no range cap, for enemy AI targeting. */
+  nearestWallPoint(x: number, y: number): { point: Point; wall: WallPath } | null {
+    let best: { point: Point; wall: WallPath } | null = null;
+    let bestDist = Infinity;
+    for (const s of this.structures) {
+      if (s.kind !== 'wall') continue;
+      for (let i = 0; i < s.points.length - 1; i++) {
+        const proj = closestPointOnSegment({ x, y }, s.points[i], s.points[i + 1]);
+        const d = Phaser.Math.Distance.Between(x, y, proj.x, proj.y);
+        if (d < bestDist) {
+          bestDist = d;
+          best = { point: proj, wall: s };
+        }
+      }
+    }
+    return best;
+  }
+
   addWallPath(points: Point[]) {
     if (points.length < 2) return;
     if (points.some((p) => !this.isBuildable(p.x, p.y))) return;
-    this.structures.push({ kind: 'wall', points });
+    const maxHp = WALL_BASE_HP + (pathLength(points) / 100) * WALL_HP_PER_100PX;
+    this.structures.push({ kind: 'wall', points, hp: maxHp, maxHp });
     this.render();
   }
 
   addPoint(kind: 'tower' | 'gate', x: number, y: number) {
-    this.structures.push({ kind, x, y });
+    const maxHp = kind === 'tower' ? TOWER_MAX_HP : GATE_MAX_HP;
+    this.structures.push({ kind, x, y, hp: maxHp, maxHp });
     this.render();
+  }
+
+  /** Applies damage to a structure; removes and returns true if it's destroyed. */
+  damage(target: Structure, amount: number): boolean {
+    target.hp -= amount;
+    if (target.hp <= 0) {
+      this.structures = this.structures.filter((s) => s !== target);
+      this.render();
+      return true;
+    }
+    this.render();
+    return false;
   }
 
   previewWallPath(preview: Phaser.GameObjects.Graphics, points: Point[]) {
@@ -133,19 +196,23 @@ export class BuildSystem {
     }
   }
 
-  private render() {
+  render() {
     this.graphics.clear();
     for (const s of this.structures) {
+      const damageFrac = 1 - s.hp / s.maxHp;
       if (s.kind === 'wall') {
-        strokeThickPath(this.graphics, s.points, WALL_COLOR, WALL_WIDTH, 1);
-        strokeThickPath(this.graphics, s.points, WALL_CORE_COLOR, WALL_WIDTH * 0.55, 1);
+        const color = lerpColor(WALL_COLOR, DAMAGE_COLOR, damageFrac);
+        strokeThickPath(this.graphics, s.points, color, WALL_WIDTH, 1);
+        strokeThickPath(this.graphics, s.points, lerpColor(WALL_CORE_COLOR, DAMAGE_COLOR, damageFrac), WALL_WIDTH * 0.55, 1);
       } else if (s.kind === 'tower') {
-        this.graphics.fillStyle(TOWER_COLOR, 1);
+        const color = lerpColor(TOWER_COLOR, DAMAGE_COLOR, damageFrac);
+        this.graphics.fillStyle(color, 1);
         this.graphics.fillCircle(s.x, s.y, TOWER_RADIUS);
         this.graphics.lineStyle(3, 0x231f1a, 1);
         this.graphics.strokeCircle(s.x, s.y, TOWER_RADIUS);
       } else {
-        this.graphics.fillStyle(GATE_COLOR, 1);
+        const color = lerpColor(GATE_COLOR, DAMAGE_COLOR, damageFrac);
+        this.graphics.fillStyle(color, 1);
         this.graphics.fillRect(s.x - GATE_SIZE / 2, s.y - GATE_SIZE / 2, GATE_SIZE, GATE_SIZE);
         this.graphics.lineStyle(3, 0x231f1a, 1);
         this.graphics.strokeRect(s.x - GATE_SIZE / 2, s.y - GATE_SIZE / 2, GATE_SIZE, GATE_SIZE);
