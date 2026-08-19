@@ -58,6 +58,7 @@ interface Soldier {
   y: number;
   type: SoldierType;
   attackCooldown: number;
+  terrainBonus: number; // multiplier on range/damage - the high ground actually matters
 }
 
 // Troop data (troopData.ts) uses small abstract units for speed/range
@@ -83,6 +84,8 @@ const PACK_CONNECT_RADIUS = 75; // packs within this range of each other visuall
 
 const ENEMY_BASE_COUNT = 3;
 const ENEMY_COUNT_PER_ROUND = 1;
+
+const HILLS_DEFENDER_BONUS = 1.3; // +30% range and damage for defenders on high ground
 
 // Cumulative unlock schedule: a type becomes available in the spawn
 // pool from this round onward. Missing = available from round 1.
@@ -231,18 +234,22 @@ export class CombatSystem {
 
     for (const t of towers) {
       if (this.soldiers.length >= maxSoldiers) break;
-      this.soldiers.push({ x: t.x, y: t.y, type: 'guard', attackCooldown: 0 });
+      this.soldiers.push({ x: t.x, y: t.y, type: 'guard', attackCooldown: 0, terrainBonus: this.terrainDefenseBonus(t.x, t.y) });
     }
 
     for (const s of sections) {
       if (this.soldiers.length >= maxSoldiers) break;
-      this.soldiers.push({
-        x: s.a.x + (s.b.x - s.a.x) / 2,
-        y: s.a.y + (s.b.y - s.a.y) / 2,
-        type: 'militia',
-        attackCooldown: 0,
-      });
+      const x = s.a.x + (s.b.x - s.a.x) / 2;
+      const y = s.a.y + (s.b.y - s.a.y) / 2;
+      this.soldiers.push({ x, y, type: 'militia', attackCooldown: 0, terrainBonus: this.terrainDefenseBonus(x, y) });
     }
+  }
+
+  // The high ground actually matters: a wall or tower built on hills
+  // gives its defenders more reach and harder-hitting shots, so routing
+  // your defenses along elevated terrain is a real tactical choice.
+  private terrainDefenseBonus(x: number, y: number): number {
+    return this.buildSystem.getBiomeAt(x, y) === Biome.Hills ? HILLS_DEFENDER_BONUS : 1;
   }
 
   spawnWave(round: number) {
@@ -467,10 +474,11 @@ export class CombatSystem {
 
     for (const soldier of this.soldiers) {
       const stats = SOLDIER_TYPES[soldier.type];
+      const range = stats.range * soldier.terrainBonus;
       soldier.attackCooldown -= dt;
       if (soldier.attackCooldown > 0) continue;
       let closest: Enemy | null = null;
-      let closestDist = stats.range;
+      let closestDist = range;
       for (const enemy of this.enemies) {
         const d = Phaser.Math.Distance.Between(soldier.x, soldier.y, enemy.x, enemy.y);
         if (d < closestDist) {
@@ -479,7 +487,7 @@ export class CombatSystem {
         }
       }
       if (closest) {
-        closest.hp -= stats.damage;
+        closest.hp -= stats.damage * soldier.terrainBonus;
         soldier.attackCooldown = stats.attackInterval;
       }
     }
@@ -506,6 +514,10 @@ export class CombatSystem {
 
     for (const s of this.soldiers) {
       const stats = SOLDIER_TYPES[s.type];
+      if (s.terrainBonus > 1) {
+        this.graphics.lineStyle(2, 0xe0b94f, 0.8);
+        this.graphics.strokeCircle(s.x, s.y, stats.radius + 4);
+      }
       this.graphics.fillStyle(stats.color, 1);
       this.graphics.fillCircle(s.x, s.y, stats.radius);
       this.graphics.lineStyle(2, SOLDIER_DARK, 1);
