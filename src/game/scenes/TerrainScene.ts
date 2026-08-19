@@ -16,6 +16,7 @@ export class TerrainScene extends Phaser.Scene {
   private previewGraphics!: Phaser.GameObjects.Graphics;
   private worldWidth = 0;
   private worldHeight = 0;
+  private minZoom = 0.2;
 
   private activeTool: ToolType = 'none';
   private isPanning = false;
@@ -70,26 +71,30 @@ export class TerrainScene extends Phaser.Scene {
     rt.draw(g, 0, 0);
     g.destroy();
 
-    this.cameras.main.setBounds(
-      -this.worldWidth * 0.25,
-      -this.worldHeight * 0.25,
-      this.worldWidth * 1.5,
-      this.worldHeight * 1.5,
-    );
+    // Bounds match the map exactly so the camera can never pan past its edges.
+    this.cameras.main.setBounds(0, 0, this.worldWidth, this.worldHeight);
   }
 
   private setupCamera() {
-    this.fitCameraToScreen();
+    this.recalcMinZoom();
+    this.cameras.main.setZoom(this.minZoom);
+    this.cameras.main.centerOn(this.worldWidth / 2, this.worldHeight / 2);
   }
 
   // The map is generated to match the screen's aspect ratio (see
   // create()), so covering the viewport here needs little to no
-  // cropping on either axis.
+  // cropping on either axis. minZoom is pinned to this fit so the
+  // player can never zoom/pan past the map edges into empty space.
+  private recalcMinZoom() {
+    this.minZoom = Math.max(this.scale.width / this.worldWidth, this.scale.height / this.worldHeight) * 1.02;
+  }
+
+  // On resize, only push zoom up to cover the new viewport if needed -
+  // never snap a more-zoomed-in view back out.
   private fitCameraToScreen() {
+    this.recalcMinZoom();
     const cam = this.cameras.main;
-    const fitZoom = Math.max(this.scale.width / this.worldWidth, this.scale.height / this.worldHeight);
-    cam.setZoom(fitZoom * 1.02);
-    cam.centerOn(this.worldWidth / 2, this.worldHeight / 2);
+    if (cam.zoom < this.minZoom) cam.setZoom(this.minZoom);
   }
 
   private setupInput() {
@@ -122,9 +127,10 @@ export class TerrainScene extends Phaser.Scene {
         return;
       }
 
-      // tower / gate: snap onto a nearby wall if there is one, then place on tap
+      // tower / gate: can only be placed on top of an existing wall
       const snapped = this.buildSystem.snapToWallLine(world.x, world.y);
-      this.buildSystem.addPoint(this.activeTool, snapped.x, snapped.y);
+      if (snapped) this.buildSystem.addPoint(this.activeTool, snapped.x, snapped.y);
+      this.previewGraphics.clear();
     });
 
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
@@ -134,7 +140,7 @@ export class TerrainScene extends Phaser.Scene {
       if (p1.isDown && p2.isDown) {
         const dist = Phaser.Math.Distance.Between(p1.x, p1.y, p2.x, p2.y);
         if (this.pinchDistance > 0) {
-          const next = Phaser.Math.Clamp(cam.zoom + (dist - this.pinchDistance) * 0.004, 0.2, 4);
+          const next = Phaser.Math.Clamp(cam.zoom + (dist - this.pinchDistance) * 0.004, this.minZoom, 4);
           cam.setZoom(next);
         }
         this.pinchDistance = dist;
@@ -158,6 +164,19 @@ export class TerrainScene extends Phaser.Scene {
           this.wallPoints.push({ x: world.x, y: world.y });
         }
         this.buildSystem.previewWallPath(this.previewGraphics, [...this.wallPoints, world]);
+        return;
+      }
+
+      if (this.activeTool === 'tower' || this.activeTool === 'gate') {
+        const world = cam.getWorldPoint(pointer.x, pointer.y);
+        const snapped = this.buildSystem.snapToWallLine(world.x, world.y);
+        this.buildSystem.previewPoint(
+          this.previewGraphics,
+          this.activeTool,
+          snapped ? snapped.x : world.x,
+          snapped ? snapped.y : world.y,
+          !!snapped,
+        );
       }
     });
 
@@ -181,7 +200,7 @@ export class TerrainScene extends Phaser.Scene {
     this.input.on(
       'wheel',
       (_pointer: Phaser.Input.Pointer, _objects: unknown, _dx: number, dy: number) => {
-        const next = Phaser.Math.Clamp(cam.zoom - dy * 0.001, 0.2, 4);
+        const next = Phaser.Math.Clamp(cam.zoom - dy * 0.001, this.minZoom, 4);
         cam.setZoom(next);
       },
     );

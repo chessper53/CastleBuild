@@ -80,9 +80,13 @@ export class BuildSystem {
     return best;
   }
 
-  /** Snaps to the nearest point along any wall (not just vertices), for towers/gates. */
-  snapToWallLine(x: number, y: number, radius = STRUCTURE_SNAP_RADIUS): Point {
-    let best: Point = { x, y };
+  /**
+   * Nearest point along any existing wall (not just vertices), within
+   * range. Towers/gates require this to be non-null: they can only be
+   * built on a wall, never freestanding.
+   */
+  snapToWallLine(x: number, y: number, radius = STRUCTURE_SNAP_RADIUS): Point | null {
+    let best: Point | null = null;
     let bestDist = radius;
     for (const s of this.structures) {
       if (s.kind !== 'wall') continue;
@@ -106,7 +110,6 @@ export class BuildSystem {
   }
 
   addPoint(kind: 'tower' | 'gate', x: number, y: number) {
-    if (!this.isBuildable(x, y)) return;
     this.structures.push({ kind, x, y });
     this.render();
   }
@@ -118,9 +121,8 @@ export class BuildSystem {
     strokeThickPath(preview, points, valid ? VALID_COLOR : INVALID_COLOR, WALL_WIDTH, 0.65);
   }
 
-  previewPoint(preview: Phaser.GameObjects.Graphics, kind: 'tower' | 'gate', x: number, y: number) {
+  previewPoint(preview: Phaser.GameObjects.Graphics, kind: 'tower' | 'gate', x: number, y: number, valid: boolean) {
     preview.clear();
-    const valid = this.isBuildable(x, y);
     const color = valid ? VALID_COLOR : INVALID_COLOR;
     if (kind === 'tower') {
       preview.fillStyle(color, 0.55);
