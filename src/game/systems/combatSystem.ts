@@ -54,6 +54,7 @@ interface Enemy {
   progressCheckpoint: Point; // position last time progress was measured
   progressTimer: number;
   forcingThrough: boolean; // true when recent progress was too small - ignore terrain until it clears
+  retargetTimer: number;
 }
 
 interface Soldier {
@@ -75,6 +76,7 @@ const FOCUS_FIRE_RADIUS = 220 * SCALE; // squads within this range of a damaged 
 const PROGRESS_CHECK_INTERVAL = 1.5; // seconds between "did I actually get closer" checks
 const MIN_PROGRESS_DISTANCE = 25 * SCALE; // px an enemy must close over that interval or it's considered stuck
 const MIN_TERRAIN_SPEED_FACTOR = 0.05; // never fully immobilize - avoids permanent freezes
+const RETARGET_INTERVAL = 2; // seconds between "is there a better target now" checks
 
 // Each marker on the field is a pack of troop.stackCount men (or
 // engines), not one soldier - a pack's hp is that count times the
@@ -242,6 +244,10 @@ export class CombatSystem {
         progressCheckpoint: { x, y },
         progressTimer: 0,
         forcingThrough: false,
+        // Staggered so a whole wave doesn't re-evaluate its target on
+        // the exact same frame - that'd read as every pack twitching
+        // in unison instead of a natural, spread-out reaction.
+        retargetTimer: this.rng() * RETARGET_INTERVAL,
       });
     }
   }
@@ -400,6 +406,30 @@ export class CombatSystem {
       if (enemy.target.type === 'structure' && !liveStructures.has(enemy.target.structure)) {
         enemy.target = this.acquireTarget(enemy.x, enemy.y);
         enemy.state = 'moving';
+      } else {
+        // A wall breaking or a gate falling doesn't just matter to
+        // whoever's fighting it - it can open a clean line to the
+        // keep (or a juicier, already-cracked target) for packs that
+        // are elsewhere entirely. Without this, every pack would be
+        // locked onto whatever it first walked up to for the rest of
+        // the round, ignoring breaches its allies make. Periodic
+        // instead of every-frame so it's cheap and doesn't thrash a
+        // pack that's already on the correct target.
+        enemy.retargetTimer -= dt;
+        if (enemy.retargetTimer <= 0) {
+          enemy.retargetTimer += RETARGET_INTERVAL;
+          const reconsidered = this.acquireTarget(enemy.x, enemy.y);
+          const sameTarget =
+            reconsidered.type === enemy.target.type &&
+            (reconsidered.type === 'keep' ||
+              (reconsidered.type === 'structure' &&
+                enemy.target.type === 'structure' &&
+                reconsidered.structure === enemy.target.structure));
+          if (!sameTarget) {
+            enemy.target = reconsidered;
+            enemy.state = 'moving';
+          }
+        }
       }
 
       const targetPoint = enemy.target.point;

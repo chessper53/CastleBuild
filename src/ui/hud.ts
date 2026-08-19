@@ -65,12 +65,14 @@ export function setupHud() {
   const soldiersCount = top.querySelector('.soldiers-count') as HTMLSpanElement;
   const speedBtn = top.querySelector('.speed-btn') as HTMLButtonElement;
 
-  let fastForward = false;
+  const SPEEDS = [1, 5, 25];
+  let speedIndex = 0;
   speedBtn.addEventListener('click', () => {
-    fastForward = !fastForward;
-    speedBtn.textContent = fastForward ? '5×' : '1×';
-    speedBtn.classList.toggle('active', fastForward);
-    requestSetSpeed(fastForward ? 5 : 1);
+    speedIndex = (speedIndex + 1) % SPEEDS.length;
+    const speed = SPEEDS[speedIndex];
+    speedBtn.textContent = `${speed}×`;
+    speedBtn.classList.toggle('active', speed > 1);
+    requestSetSpeed(speed);
   });
 
   const codexBtn = document.createElement('button');
