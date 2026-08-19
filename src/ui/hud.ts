@@ -56,7 +56,7 @@ export function setupHud() {
   const top = document.createElement('div');
   top.className = 'hud-panel hud-top';
   top.innerHTML = `
-    <span class="hud-round">Round 1</span>
+    <span class="hud-round">Day 1</span>
     <div class="hud-resources">
       <span class="hud-resource"><span class="icon">\u{2694}\u{FE0F}</span><span class="soldiers-count">0</span></span>
     </div>
@@ -106,7 +106,7 @@ export function setupHud() {
   status.innerHTML = `
     <span class="status-text">Raise your defenses</span>
     <div class="keep-bar-track"><div class="keep-bar-fill"></div></div>
-    <button class="start-round-btn">Start Round</button>
+    <button class="start-round-btn">Start</button>
   `;
   const statusText = status.querySelector('.status-text') as HTMLSpanElement;
   const keepBarTrack = status.querySelector('.keep-bar-track') as HTMLDivElement;
@@ -142,7 +142,7 @@ export function setupHud() {
   overlay.innerHTML = `
     <div class="overlay-panel">
       <h2>The Castle Has Fallen</h2>
-      <p>You held the line for <span class="overlay-round">1</span> round(s).</p>
+      <p>You survived <span class="overlay-round">1</span> day(s).</p>
       <button class="restart-btn">Try Again</button>
     </div>
   `;
@@ -160,10 +160,11 @@ export function setupHud() {
   document.body.appendChild(root);
 
   onGameState((state: GameStatePayload) => {
-    roundLabel.textContent = state.phase === 'placement' ? 'Choose Your Site' : `Round ${state.round}`;
+    const dayIcon = state.isNight ? '\u{1F319}' : '\u{2600}\u{FE0F}';
+    roundLabel.textContent = state.phase === 'placement' ? 'Choose Your Site' : `${dayIcon} Day ${state.day}`;
     soldiersCount.textContent = String(state.soldiersAlive);
 
-    const buildAllowed = state.phase === 'build';
+    const buildAllowed = state.phase === 'build' || state.phase === 'combat';
     for (const b of buttons.values()) {
       b.classList.toggle('disabled', !buildAllowed);
       (b as HTMLButtonElement).disabled = !buildAllowed;
@@ -177,18 +178,21 @@ export function setupHud() {
       keepBarTrack.style.display = 'none';
       startRoundBtn.style.display = 'none';
     } else if (state.phase === 'build') {
-      statusText.textContent = state.hasGate ? 'Raise your defenses' : 'Build a gate before you can start the round';
+      statusText.textContent = state.hasGate ? 'Raise your defenses' : 'Build a gate before you can start the siege';
       keepBarTrack.style.display = 'none';
       startRoundBtn.style.display = '';
       startRoundBtn.disabled = !state.hasGate;
       startRoundBtn.classList.toggle('disabled', !state.hasGate);
     } else if (state.phase === 'combat') {
-      statusText.textContent = `Wave ${state.round} — ${state.enemiesRemaining} enem${state.enemiesRemaining === 1 ? 'y' : 'ies'} remaining`;
+      statusText.textContent =
+        state.enemiesRemaining > 0
+          ? `${state.enemiesRemaining} raider${state.enemiesRemaining === 1 ? '' : 's'} on the field`
+          : 'The encampment is still gathering its strength';
       keepBarTrack.style.display = '';
       keepBarFill.style.width = `${Math.max(0, (state.keepHp / state.keepMaxHp) * 100)}%`;
       startRoundBtn.style.display = 'none';
     } else {
-      overlayRound.textContent = String(Math.max(1, state.round - 1));
+      overlayRound.textContent = String(Math.max(1, state.day));
       overlay.classList.add('visible');
     }
   });

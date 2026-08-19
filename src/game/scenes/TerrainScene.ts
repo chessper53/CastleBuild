@@ -4,6 +4,8 @@ import { renderTerrainCanvas } from '../systems/terrainRenderer';
 import { BuildSystem, DELETE_TAP_RADIUS, type Point } from '../systems/buildSystem';
 import { CombatSystem, KEEP_SIZE } from '../systems/combatSystem';
 import { TROOP_ICON_SVG } from '../systems/troopIconsSvg';
+import { UI_ICON_SVG } from '../systems/uiIconsSvg';
+import { ENCAMPMENT_STAGE_SVG } from '../systems/encampmentIconsSvg';
 import { onSetTool, setTool, onStartRound, onSetSpeed, publishGameState, type ToolType, type Phase } from '../events';
 
 const ICON_RASTER_SIZE = 160; // px the SVG icons are rasterized to - comfortably above any in-game display size
@@ -39,7 +41,6 @@ export class TerrainScene extends Phaser.Scene {
   private minZoom = 0.2;
 
   private phase: Phase = 'placement';
-  private round = 1;
   private statePublishTimer = 0;
   private timeScale = 1;
 
@@ -59,11 +60,14 @@ export class TerrainScene extends Phaser.Scene {
   preload() {
     // Phaser's SVG loader expects a base64 data URI specifically (it
     // atob()s the payload), not a percent-encoded one.
-    for (const [id, svg] of Object.entries(TROOP_ICON_SVG)) {
+    const loadSvg = (key: string, svg: string, size: number) => {
       const base64 = btoa(unescape(encodeURIComponent(svg)));
-      const url = `data:image/svg+xml;base64,${base64}`;
-      this.load.svg(`troop-icon-${id}`, url, { width: ICON_RASTER_SIZE, height: ICON_RASTER_SIZE });
-    }
+      this.load.svg(key, `data:image/svg+xml;base64,${base64}`, { width: size, height: size });
+    };
+    for (const [id, svg] of Object.entries(TROOP_ICON_SVG)) loadSvg(`troop-icon-${id}`, svg, ICON_RASTER_SIZE);
+    loadSvg('ui-icon-wall', UI_ICON_SVG.wall, ICON_RASTER_SIZE);
+    loadSvg('ui-icon-tower', UI_ICON_SVG.tower, ICON_RASTER_SIZE);
+    ENCAMPMENT_STAGE_SVG.forEach((svg, i) => loadSvg(`encampment-stage-${i}`, svg, 220));
   }
 
   create() {
@@ -98,7 +102,9 @@ export class TerrainScene extends Phaser.Scene {
       this.activeTool = 'none';
       setTool('none');
       this.combatSystem.stationSoldiers(SOLDIERS_MAX);
-      this.combatSystem.spawnWave(this.round);
+      // No discrete waves anymore - starting just begins the day
+      // clock. The encampment builds itself up and starts sending
+      // raiders on its own schedule (see CombatSystem.update).
       this.phase = 'combat';
       this.publishState();
     });
@@ -120,13 +126,6 @@ export class TerrainScene extends Phaser.Scene {
     if (this.combatSystem.keepHp <= 0) {
       this.phase = 'gameover';
       this.publishState();
-      return;
-    }
-
-    if (this.combatSystem.enemiesRemaining === 0) {
-      this.phase = 'build';
-      this.round += 1;
-      this.publishState();
     }
   }
 
@@ -137,7 +136,8 @@ export class TerrainScene extends Phaser.Scene {
   private publishState() {
     publishGameState({
       phase: this.phase,
-      round: this.round,
+      day: this.combatSystem?.day ?? 1,
+      isNight: this.combatSystem?.isNight ?? false,
       keepHp: this.combatSystem?.keepHp ?? 100,
       keepMaxHp: this.combatSystem?.keepMaxHp ?? 100,
       soldiersAlive: SOLDIERS_MAX,
@@ -224,7 +224,11 @@ export class TerrainScene extends Phaser.Scene {
 
       this.pointerDownScreen.set(pointer.x, pointer.y);
 
-      const buildAllowed = this.phase === 'build';
+      // Building stays available through the ongoing siege too, not
+      // just the initial prep window - there's no more "wave cleared"
+      // pause to do repairs in, so the only chance to patch a wall is
+      // while raiders are still inbound.
+      const buildAllowed = this.phase === 'build' || this.phase === 'combat';
       const world = cam.getWorldPoint(pointer.x, pointer.y);
 
       if (this.activeTool === 'none' || !buildAllowed) {
@@ -280,7 +284,11 @@ export class TerrainScene extends Phaser.Scene {
         this.drawKeepPlacementPreview(world, this.buildSystem.isBuildable(world.x, world.y));
       }
 
-      const buildAllowed = this.phase === 'build';
+      // Building stays available through the ongoing siege too, not
+      // just the initial prep window - there's no more "wave cleared"
+      // pause to do repairs in, so the only chance to patch a wall is
+      // while raiders are still inbound.
+      const buildAllowed = this.phase === 'build' || this.phase === 'combat';
 
       if (this.activeTool === 'none' || !buildAllowed) {
         if (!this.isPanning) return;

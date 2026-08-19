@@ -3,7 +3,8 @@ export type Phase = 'placement' | 'build' | 'combat' | 'gameover';
 
 export interface GameStatePayload {
   phase: Phase;
-  round: number;
+  day: number;
+  isNight: boolean;
   keepHp: number;
   keepMaxHp: number;
   soldiersAlive: number;

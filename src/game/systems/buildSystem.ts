@@ -34,11 +34,16 @@ const UNBUILDABLE_BIOMES = new Set<Biome>([Biome.Water]);
 // scales interact.
 const SCALE = 1.5;
 
-const WALL_COLOR = 0x4a4238;
-const WALL_CORE_COLOR = 0x5c5142;
+const WALL_TEXTURE_KEY = 'ui-icon-wall';
+const TOWER_TEXTURE_KEY = 'ui-icon-tower';
+// Matches ui-icon-wall's own viewBox aspect ratio - used to tile a
+// wall segment with roughly-square-looking repeats instead of
+// stretching one image across the whole length.
+const WALL_TILE_ASPECT = 130 / 100;
+const DAMAGE_TINT = 0x8a332a;
+
 const WALL_WIDTH = 24 * SCALE;
 const TOWER_RADIUS = 22 * SCALE;
-const TOWER_COLOR = 0x5a5142;
 const GATE_COLOR = 0x8a5a2b;
 const GATE_SIZE = 28 * SCALE;
 const INVALID_COLOR = 0xb0392f;
@@ -128,12 +133,21 @@ function lerpColor(a: number, b: number, t: number): number {
 }
 
 export class BuildSystem {
+  private scene: Phaser.Scene;
   private structures: Structure[] = [];
   private graphics: Phaser.GameObjects.Graphics;
   private terrain: TerrainMap;
   private cellSize: number;
+  // Wall/tower sprites are pooled Image objects, recreated-in-place
+  // each render() call (cheap since render() only runs on discrete
+  // build/damage/remove events, not every frame) - same pattern as
+  // the enemy icon pool in combatSystem.ts, and for the same reason:
+  // never allocate a fresh GameObject per structure per call.
+  private structureImagePool: Phaser.GameObjects.Image[] = [];
+  private structureImageCount = 0;
 
   constructor(scene: Phaser.Scene, terrain: TerrainMap, cellSize: number) {
+    this.scene = scene;
     this.graphics = scene.add.graphics();
     this.terrain = terrain;
     this.cellSize = cellSize;
@@ -313,20 +327,18 @@ export class BuildSystem {
 
   render() {
     this.graphics.clear();
+    this.structureImageCount = 0;
+    const wallTextureReady = this.scene.textures.exists(WALL_TEXTURE_KEY);
+    const towerTextureReady = this.scene.textures.exists(TOWER_TEXTURE_KEY);
+
     for (const s of this.structures) {
       const hpFrac = Phaser.Math.Clamp(s.hp / s.maxHp, 0, 1);
       const damageFrac = 1 - hpFrac;
       if (s.kind === 'wallSection') {
-        const color = lerpColor(WALL_COLOR, DAMAGE_COLOR, damageFrac);
-        strokeThickPath(this.graphics, [s.a, s.b], color, WALL_WIDTH, 1);
-        strokeThickPath(this.graphics, [s.a, s.b], lerpColor(WALL_CORE_COLOR, DAMAGE_COLOR, damageFrac), WALL_WIDTH * 0.55, 1);
+        if (wallTextureReady) this.renderWallSection(s, damageFrac);
         this.drawHitBar(s.a.x + (s.b.x - s.a.x) / 2, Math.min(s.a.y, s.b.y) - HITBAR_GAP, hpFrac);
       } else if (s.kind === 'tower') {
-        const color = lerpColor(TOWER_COLOR, DAMAGE_COLOR, damageFrac);
-        this.graphics.fillStyle(color, 1);
-        this.graphics.fillCircle(s.x, s.y, TOWER_RADIUS);
-        this.graphics.lineStyle(3, 0x231f1a, 1);
-        this.graphics.strokeCircle(s.x, s.y, TOWER_RADIUS);
+        if (towerTextureReady) this.renderTower(s, damageFrac);
         this.drawHitBar(s.x, s.y - TOWER_RADIUS - HITBAR_GAP, hpFrac);
       } else {
         const color = lerpColor(GATE_COLOR, DAMAGE_COLOR, damageFrac);
@@ -337,6 +349,56 @@ export class BuildSystem {
         this.drawHitBar(s.x, s.y - GATE_SIZE / 2 - HITBAR_GAP, hpFrac);
       }
     }
+
+    for (let i = this.structureImageCount; i < this.structureImagePool.length; i++) {
+      this.structureImagePool[i].setVisible(false);
+    }
+  }
+
+  // Tiles the wall glyph along the section instead of stretching one
+  // copy across the whole length - a single stretched image would
+  // squash the crenellations at anything but exactly the icon's own
+  // aspect ratio.
+  private renderWallSection(s: WallSection, damageFrac: number) {
+    const len = Phaser.Math.Distance.Between(s.a.x, s.a.y, s.b.x, s.b.y);
+    if (len < 1) return;
+    const angle = Math.atan2(s.b.y - s.a.y, s.b.x - s.a.x);
+    const idealTileWidth = WALL_WIDTH * WALL_TILE_ASPECT;
+    const tileCount = Math.max(1, Math.round(len / idealTileWidth));
+    const tileWidth = len / tileCount;
+    const tint = lerpColor(0xffffff, DAMAGE_TINT, damageFrac);
+
+    for (let i = 0; i < tileCount; i++) {
+      const t = (i + 0.5) / tileCount;
+      const img = this.getStructureImage();
+      img.setTexture(WALL_TEXTURE_KEY);
+      img.setPosition(s.a.x + (s.b.x - s.a.x) * t, s.a.y + (s.b.y - s.a.y) * t);
+      img.setRotation(angle);
+      // Slight overlap so adjacent tiles don't show a seam at the join.
+      img.setDisplaySize(tileWidth * 1.06, WALL_WIDTH);
+      img.setTint(tint);
+      img.setVisible(true);
+    }
+  }
+
+  private renderTower(s: PointStructure, damageFrac: number) {
+    const img = this.getStructureImage();
+    img.setTexture(TOWER_TEXTURE_KEY);
+    img.setPosition(s.x, s.y);
+    img.setRotation(0);
+    img.setDisplaySize(TOWER_RADIUS * 2.1, TOWER_RADIUS * 2.1);
+    img.setTint(lerpColor(0xffffff, DAMAGE_TINT, damageFrac));
+    img.setVisible(true);
+  }
+
+  private getStructureImage(): Phaser.GameObjects.Image {
+    let img = this.structureImagePool[this.structureImageCount];
+    if (!img) {
+      img = this.scene.add.image(0, 0, '__DEFAULT');
+      this.structureImagePool[this.structureImageCount] = img;
+    }
+    this.structureImageCount++;
+    return img;
   }
 
   private drawHitBar(centerX: number, bottomY: number, hpFrac: number) {

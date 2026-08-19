@@ -84,30 +84,48 @@ const RETARGET_INTERVAL = 2; // seconds between "is there a better target now" c
 // an actual fight instead of an instant kill.
 const PACK_CONNECT_RADIUS = 75 * SCALE; // packs within this range of each other visually link up
 
-const ENEMY_BASE_COUNT = 4;
-const ENEMY_COUNT_PER_ROUND = 2;
-
 const HILLS_DEFENDER_BONUS = 1.3; // +30% range and damage for defenders on high ground
 
-// Cumulative unlock schedule: a type becomes available in the spawn
-// pool from this round onward. Missing = available from round 1.
-// Round 1 is deliberately levy-only (peasants with pitchforks should
-// never threaten a built fort on their own) but real siege equipment
-// shows up fast after that - dragging it out past round 8-9 just made
-// every early wave a non-event.
-const UNLOCK_ROUND: Record<string, number> = {
-  spearman: 2,
-  archer: 2,
-  crossbowman: 3,
-  man_at_arms: 3,
-  sapper: 3,
-  marine_raider: 4,
-  battering_ram: 4,
-  mangonel: 4,
-  knight: 5,
-  ballista: 5,
-  trebuchet: 6,
+// --- Day/night survival pacing -------------------------------------
+// One knob controls the whole game's tempo: every duration below is
+// expressed in days (fractions of DAY_LENGTH_SECONDS), so scaling
+// this single constant rescales the encampment build time, the raid
+// cadence and the day/night cycle together instead of needing to
+// retune each one separately.
+const DAY_LENGTH_SECONDS = 30;
+const ENCAMPMENT_BUILD_DAYS = 1; // days until the encampment finishes and starts sending raiders
+const SPAWN_INTERVAL_START_DAYS = 0.35; // gap between packs right when the encampment goes active
+const SPAWN_INTERVAL_MIN_DAYS = 0.08; // floor - sieges never get faster than this no matter how long they run
+const SPAWN_INTERVAL_RAMP_DAYS = 0.018; // interval shrinks by this many days for each day survived past activation
+const ENCAMPMENT_SPAWN_JITTER = 55 * SCALE; // packs spawn near the encampment, not stacked exactly on it
+
+// Power tier per troop type (reused from the old unlock ordering).
+// Spawn weighting (pickTroopType) peaks around whichever tier matches
+// the current day and decays on both sides of it - every type is
+// always possible (even a stray trebuchet on day one), but the mix
+// reliably shifts toward "heavy duty" troops the longer the siege runs.
+const TROOP_TIER: Record<string, number> = {
+  levy: 0,
+  spearman: 1,
+  archer: 1,
+  crossbowman: 2,
+  man_at_arms: 2,
+  sapper: 2,
+  marine_raider: 3,
+  battering_ram: 3,
+  mangonel: 3,
+  knight: 4,
+  ballista: 4,
+  trebuchet: 5,
 };
+
+const MAX_FOG_ALPHA = 0.86;
+const KEEP_VISION_RADIUS = 250 * SCALE;
+const TOWER_VISION_RADIUS = 155 * SCALE;
+const LIGHT_MASK_TEXTURE = 'fow-light-mask';
+const FOG_DEPTH = 1000;
+const ENCAMPMENT_TEXTURE_PREFIX = 'encampment-stage-';
+const ENCAMPMENT_STAGE_COUNT = 3;
 
 const BIOME_TO_TERRAIN_ID: Partial<Record<Biome, TerrainTypeId>> = {
   [Biome.Plains]: 'PLAINS',
@@ -152,6 +170,24 @@ function getEnemyVisual(troop: TroopType): { radius: number; color: number; dark
   return { radius, color, dark: darken(color, 0.45) };
 }
 
+// A soft white-to-transparent radial gradient, used as an "eraser"
+// stamp against the fog RenderTexture - baked once as a canvas
+// texture rather than shipped as an asset.
+function bakeLightMaskCanvas(size: number): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return canvas;
+  const grd = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grd.addColorStop(0, 'rgba(255,255,255,1)');
+  grd.addColorStop(0.55, 'rgba(255,255,255,1)');
+  grd.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, 0, size, size);
+  return canvas;
+}
+
 export class CombatSystem {
   private scene: Phaser.Scene;
   private enemies: Enemy[] = [];
@@ -165,9 +201,16 @@ export class CombatSystem {
   private worldHeight: number;
   private rng: () => number;
 
+  private elapsedDays = 0;
+  private spawnTimer = SPAWN_INTERVAL_START_DAYS;
+  private encampmentImage: Phaser.GameObjects.Image;
+  private fogTexture: Phaser.GameObjects.RenderTexture;
+  private lightStamp: Phaser.GameObjects.Image;
+
   keep: Point;
   keepHp = 100;
   keepMaxHp = 100;
+  encampment: Point;
 
   constructor(
     scene: Phaser.Scene,
@@ -188,10 +231,38 @@ export class CombatSystem {
     // TerrainScene) - just record the keys, pooled Image objects
     // reference them directly with no per-instance canvas cost.
     for (const troop of TROOP_TYPES) this.iconTextureKey[troop.id] = `troop-icon-${troop.id}`;
+
+    this.encampment = this.pickEncampmentPoint();
+    this.encampmentImage = scene.add.image(this.encampment.x, this.encampment.y, '__DEFAULT').setVisible(false);
+
+    // Canvas-baked (not an SVG load), so this can happen synchronously
+    // here instead of needing to go through the scene's preload().
+    if (!scene.textures.exists(LIGHT_MASK_TEXTURE)) {
+      scene.textures.addCanvas(LIGHT_MASK_TEXTURE, bakeLightMaskCanvas(256));
+    }
+    this.lightStamp = scene.add.image(0, 0, LIGHT_MASK_TEXTURE).setVisible(false);
+    this.fogTexture = scene.add
+      .renderTexture(0, 0, worldWidth, worldHeight)
+      .setOrigin(0, 0)
+      .setDepth(FOG_DEPTH);
   }
 
   get enemiesRemaining() {
     return this.enemies.length;
+  }
+
+  /** 1-indexed day counter shown to the player - day 1 is the encampment's construction day. */
+  get day(): number {
+    return Math.floor(this.elapsedDays) + 1;
+  }
+
+  get isNight(): boolean {
+    return this.brightness() < 0.5;
+  }
+
+  private brightness(): number {
+    const t = this.elapsedDays % 1;
+    return (Math.cos(t * Math.PI * 2) + 1) / 2;
   }
 
   /**
@@ -226,47 +297,74 @@ export class CombatSystem {
     return this.buildSystem.getBiomeAt(x, y) === Biome.Hills ? HILLS_DEFENDER_BONUS : 1;
   }
 
-  spawnWave(round: number) {
-    const count = ENEMY_BASE_COUNT + round * ENEMY_COUNT_PER_ROUND;
-    this.enemies = [];
-    for (let i = 0; i < count; i++) {
-      const troop = this.pickTroopType(round);
-      const { x, y } = this.randomEdgePoint();
-      const target = this.acquireTarget(x, y);
-      const packHp = troop.health * troop.stackCount;
-      this.enemies.push({
-        x,
-        y,
-        hp: packHp,
-        maxHp: packHp,
-        troop,
-        target,
-        attackCooldown: 0,
-        setupRemaining: 0,
-        state: 'moving',
-        avoidBias: this.rng() < 0.5 ? 1 : -1,
-        progressCheckpoint: { x, y },
-        progressTimer: 0,
-        forcingThrough: false,
-        // Staggered so a whole wave doesn't re-evaluate its target on
-        // the exact same frame - that'd read as every pack twitching
-        // in unison instead of a natural, spread-out reaction.
-        retargetTimer: this.rng() * RETARGET_INTERVAL,
-      });
+  private pickEncampmentPoint(): Point {
+    // Several candidate edge points, keep the one farthest from the
+    // keep - gives the player real travel-time buffer instead of
+    // occasionally spawning the whole siege right on their doorstep.
+    let best: Point | null = null;
+    let bestDist = -1;
+    for (let i = 0; i < 10; i++) {
+      const p = this.randomEdgePoint();
+      const d = Phaser.Math.Distance.Between(p.x, p.y, this.keep.x, this.keep.y);
+      if (d > bestDist) {
+        bestDist = d;
+        best = p;
+      }
     }
+    return best ?? { x: this.worldWidth / 2, y: 0 };
   }
 
-  private pickTroopType(round: number): TroopType {
-    const pool = TROOP_TYPES.filter(
-      (t) => !UNSPAWNABLE_TROOP_IDS.has(t.id) && (UNLOCK_ROUND[t.id] ?? 1) <= round,
-    );
-    return pool[Math.floor(this.rng() * pool.length)] ?? TROOP_TYPE_BY_ID.levy;
+  private pickTroopType(effectiveDay: number): TroopType {
+    const pool = TROOP_TYPES.filter((t) => !UNSPAWNABLE_TROOP_IDS.has(t.id));
+    const weights = pool.map((t) => 2 ** -Math.abs(effectiveDay - (TROOP_TIER[t.id] ?? 0)));
+    const total = weights.reduce((sum, w) => sum + w, 0);
+    let r = this.rng() * total;
+    for (let i = 0; i < pool.length; i++) {
+      r -= weights[i];
+      if (r <= 0) return pool[i];
+    }
+    return pool[pool.length - 1] ?? TROOP_TYPE_BY_ID.levy;
+  }
+
+  private spawnPack(effectiveDay: number) {
+    const troop = this.pickTroopType(effectiveDay);
+    const { x, y } = this.encampmentSpawnPoint();
+    const target = this.acquireTarget(x, y);
+    const packHp = troop.health * troop.stackCount;
+    this.enemies.push({
+      x,
+      y,
+      hp: packHp,
+      maxHp: packHp,
+      troop,
+      target,
+      attackCooldown: 0,
+      setupRemaining: 0,
+      state: 'moving',
+      avoidBias: this.rng() < 0.5 ? 1 : -1,
+      progressCheckpoint: { x, y },
+      progressTimer: 0,
+      forcingThrough: false,
+      // Staggered so a whole burst doesn't re-evaluate its target on
+      // the exact same frame - that'd read as every pack twitching in
+      // unison instead of a natural, spread-out reaction.
+      retargetTimer: this.rng() * RETARGET_INTERVAL,
+    });
+  }
+
+  private encampmentSpawnPoint(): Point {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const x = this.encampment.x + (this.rng() * 2 - 1) * ENCAMPMENT_SPAWN_JITTER;
+      const y = this.encampment.y + (this.rng() * 2 - 1) * ENCAMPMENT_SPAWN_JITTER;
+      if (this.buildSystem.isBuildable(x, y)) return { x, y };
+    }
+    return { ...this.encampment };
   }
 
   // The map border isn't guaranteed to be land - it can dip through a
-  // lake or river. Spawning there would drop an enemy in water with no
-  // walkable direction for its whisker-steering to find, freezing it
-  // in place forever. Retry until we land on solid ground.
+  // lake. Spawning there would drop an enemy in water with no walkable
+  // direction for its whisker-steering to find, freezing it in place
+  // forever. Retry until we land on solid ground.
   private randomEdgePoint(): Point {
     for (let attempt = 0; attempt < 50; attempt++) {
       const p = this.rawEdgePoint();
@@ -402,6 +500,22 @@ export class CombatSystem {
   }
 
   update(dt: number) {
+    const dtDays = dt / DAY_LENGTH_SECONDS;
+    this.elapsedDays += dtDays;
+
+    if (this.elapsedDays >= ENCAMPMENT_BUILD_DAYS) {
+      const effectiveDay = this.elapsedDays - ENCAMPMENT_BUILD_DAYS;
+      this.spawnTimer -= dtDays;
+      if (this.spawnTimer <= 0) {
+        const interval = Math.max(
+          SPAWN_INTERVAL_MIN_DAYS,
+          SPAWN_INTERVAL_START_DAYS - effectiveDay * SPAWN_INTERVAL_RAMP_DAYS,
+        );
+        this.spawnTimer += interval;
+        this.spawnPack(effectiveDay);
+      }
+    }
+
     const liveStructures = new Set(this.buildSystem.getStructures());
 
     for (const enemy of this.enemies) {
@@ -415,10 +529,9 @@ export class CombatSystem {
         // whoever's fighting it - it can open a clean line to the
         // keep (or a juicier, already-cracked target) for packs that
         // are elsewhere entirely. Without this, every pack would be
-        // locked onto whatever it first walked up to for the rest of
-        // the round, ignoring breaches its allies make. Periodic
-        // instead of every-frame so it's cheap and doesn't thrash a
-        // pack that's already on the correct target.
+        // locked onto whatever it first walked up to forever, ignoring
+        // breaches its allies make. Periodic instead of every-frame so
+        // it's cheap and doesn't thrash a pack already on the right target.
         enemy.retargetTimer -= dt;
         if (enemy.retargetTimer <= 0) {
           enemy.retargetTimer += RETARGET_INTERVAL;
@@ -501,6 +614,8 @@ export class CombatSystem {
 
   private render() {
     this.graphics.clear();
+
+    this.renderEncampment();
 
     // Keep
     this.graphics.fillStyle(KEEP_WALL_COLOR, 1);
@@ -600,6 +715,40 @@ export class CombatSystem {
     for (let i = this.enemies.length; i < this.stackTextPool.length; i++) {
       this.stackTextPool[i].setVisible(false);
     }
+
+    this.renderFog();
+  }
+
+  private renderEncampment() {
+    const stageProgress = Phaser.Math.Clamp(this.elapsedDays / ENCAMPMENT_BUILD_DAYS, 0, 1);
+    const stage = Math.min(ENCAMPMENT_STAGE_COUNT - 1, Math.floor(stageProgress * ENCAMPMENT_STAGE_COUNT));
+    const key = `${ENCAMPMENT_TEXTURE_PREFIX}${stage}`;
+    if (!this.scene.textures.exists(key)) return;
+    this.encampmentImage.setTexture(key);
+    this.encampmentImage.setPosition(this.encampment.x, this.encampment.y);
+    this.encampmentImage.setDisplaySize(70 * BUILDING_SCALE, 70 * BUILDING_SCALE);
+    this.encampmentImage.setVisible(true);
+  }
+
+  // Cheap fog of war: fill a RenderTexture covering the whole map with
+  // a dark tint, then punch soft circular holes around the keep and
+  // any towers using the ERASE blend mode via a radial-gradient stamp.
+  // Skipped entirely in daylight so there's no per-frame cost then.
+  private renderFog() {
+    const alpha = (1 - this.brightness()) * MAX_FOG_ALPHA;
+    this.fogTexture.clear();
+    if (alpha <= 0.02) return;
+    this.fogTexture.fill(0x0b0906, alpha);
+    this.stampLight(this.keep.x, this.keep.y, KEEP_VISION_RADIUS);
+    for (const s of this.buildSystem.getStructures()) {
+      if (s.kind === 'tower') this.stampLight(s.x, s.y, TOWER_VISION_RADIUS);
+    }
+  }
+
+  private stampLight(x: number, y: number, radius: number) {
+    this.lightStamp.setDisplaySize(radius * 2, radius * 2);
+    this.lightStamp.setPosition(x, y);
+    this.fogTexture.erase(this.lightStamp);
   }
 
   private getOrCreateIcon(index: number): Phaser.GameObjects.Image {
@@ -634,6 +783,7 @@ export class CombatSystem {
   clear() {
     this.enemies = [];
     this.graphics.clear();
+    this.fogTexture.clear();
     for (const icon of this.enemyIconPool) icon.setVisible(false);
     for (const text of this.stackTextPool) text.setVisible(false);
   }
