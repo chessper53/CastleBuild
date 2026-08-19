@@ -6,17 +6,24 @@ interface TextureRule {
   frequency: number; // noise scale in cells - lower is coarser/blotchier
 }
 
-// Each biome gets its own grain so water reads as gently shimmering,
-// hills as rugged/uneven, forest as leafy speckle, etc., instead of a
-// single flat fill color.
+// Each biome gets its own subtle grain so water reads as gently
+// textured, hills as uneven, forest as leafy speckle, etc., instead of
+// a single flat fill color. Kept deliberately mild - this is meant to
+// read as clean-with-character, not noisy.
 const TEXTURE_RULES: Record<Biome, TextureRule> = {
-  [Biome.Water]: { intensity: 0.1, frequency: 9 },
-  [Biome.River]: { intensity: 0.08, frequency: 7 },
-  [Biome.Mud]: { intensity: 0.16, frequency: 6 },
-  [Biome.Plains]: { intensity: 0.07, frequency: 5 },
-  [Biome.Forest]: { intensity: 0.2, frequency: 3.5 },
-  [Biome.Hills]: { intensity: 0.22, frequency: 4.5 },
+  [Biome.Water]: { intensity: 0.05, frequency: 7 },
+  [Biome.River]: { intensity: 0.04, frequency: 6 },
+  [Biome.Mud]: { intensity: 0.07, frequency: 5 },
+  [Biome.Plains]: { intensity: 0.035, frequency: 4.5 },
+  [Biome.Forest]: { intensity: 0.09, frequency: 3 },
+  [Biome.Hills]: { intensity: 0.1, frequency: 3.5 },
 };
+
+// Supersample factor: canvas pixels per terrain cell. Higher means the
+// final GPU upscale (to CELL_SIZE px/cell on screen) is gentler, so
+// edges stay crisp instead of smearing into a blur.
+const RENDER_SCALE = 4;
+const BLUR_RADIUS = 1; // in supersampled pixels - a fraction of one cell, not a whole one
 
 function hexToRgb(hex: number): [number, number, number] {
   return [(hex >> 16) & 0xff, (hex >> 8) & 0xff, hex & 0xff];
@@ -27,15 +34,19 @@ function clamp255(v: number): number {
 }
 
 /**
- * Builds a one-pixel-per-cell canvas with per-biome texture and
- * blurred color transitions baked in. Displayed scaled up with linear
- * texture filtering (see TerrainScene), the GPU's own interpolation
- * turns this into smooth, organic-looking coastlines and gradients
- * instead of a hard-edged flat-color grid - all procedural, no art
- * assets involved.
+ * Builds a supersampled (RENDER_SCALE px per cell) canvas with subtle
+ * per-biome texture and a light blur baked in. Displayed scaled up
+ * with linear texture filtering (see TerrainScene) at a gentle final
+ * ratio, the GPU's own interpolation smooths coastlines and biome
+ * borders without turning the whole map into a haze - all procedural,
+ * no art assets involved.
  */
 export function renderTerrainCanvas(terrain: TerrainMap): HTMLCanvasElement {
-  const { width, height } = terrain;
+  const cellsX = terrain.width;
+  const cellsY = terrain.height;
+  const width = cellsX * RENDER_SCALE;
+  const height = cellsY * RENDER_SCALE;
+
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -45,21 +56,23 @@ export function renderTerrainCanvas(terrain: TerrainMap): HTMLCanvasElement {
   const textureNoise = createNoise2D(() => Math.random());
   const rgb = new Float32Array(width * height * 3);
 
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const cell = terrain.get(x, y);
+  for (let py = 0; py < height; py++) {
+    const cellY = Math.floor(py / RENDER_SCALE);
+    for (let px = 0; px < width; px++) {
+      const cellX = Math.floor(px / RENDER_SCALE);
+      const cell = terrain.get(cellX, cellY);
       const [r, g, b] = hexToRgb(BIOME_COLOR[cell.biome]);
       const rule = TEXTURE_RULES[cell.biome];
-      const n = textureNoise(x / rule.frequency, y / rule.frequency);
+      const n = textureNoise(px / RENDER_SCALE / rule.frequency, py / RENDER_SCALE / rule.frequency);
       const brightness = 1 + n * rule.intensity;
-      const i = (y * width + x) * 3;
+      const i = (py * width + px) * 3;
       rgb[i] = r * brightness;
       rgb[i + 1] = g * brightness;
       rgb[i + 2] = b * brightness;
     }
   }
 
-  const blurred = boxBlurRgb(rgb, width, height, 1);
+  const blurred = boxBlurRgb(rgb, width, height, BLUR_RADIUS);
 
   const img = ctx.createImageData(width, height);
   for (let p = 0; p < width * height; p++) {

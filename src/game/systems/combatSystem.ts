@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { BuildSystem, type Point, type PointStructure, type Structure, type WallSection } from './buildSystem';
 import { Biome } from './terrainGenerator';
-import { TROOP_TYPES, TROOP_TYPE_BY_ID, UNSPAWNABLE_TROOP_IDS, type TerrainTypeId, type TroopType } from './troopData';
+import { TROOP_TYPES, TROOP_TYPE_BY_ID, TROOP_ICON, UNSPAWNABLE_TROOP_IDS, type TerrainTypeId, type TroopType } from './troopData';
 
 interface StructureTarget {
   type: 'structure';
@@ -47,7 +47,9 @@ interface Enemy {
   setupRemaining: number;
   state: 'moving' | 'setup' | 'attacking';
   avoidBias: number; // -1 or 1, keeps obstacle-avoidance turns consistent instead of jittering
-  stuckTime: number; // seconds since whisker-steering last found a walkable step
+  progressCheckpoint: Point; // position last time progress was measured
+  progressTimer: number;
+  forcingThrough: boolean; // true when recent progress was too small - ignore terrain until it clears
 }
 
 interface Soldier {
@@ -64,7 +66,8 @@ const SPEED_SCALE = 48;
 const RANGE_SCALE = 15;
 const MELEE_ATTACK_RANGE = 18;
 const SETUP_TIME = 2.5;
-const STUCK_FORCE_THRESHOLD = 2; // seconds boxed in before an enemy forces its way through terrain
+const PROGRESS_CHECK_INTERVAL = 1.5; // seconds between "did I actually get closer" checks
+const MIN_PROGRESS_DISTANCE = 25; // px an enemy must close over that interval or it's considered stuck
 const MIN_TERRAIN_SPEED_FACTOR = 0.05; // never fully immobilize - avoids permanent freezes
 
 const ENEMY_BASE_COUNT = 5;
@@ -127,9 +130,12 @@ function getEnemyVisual(troop: TroopType): { radius: number; color: number; dark
 }
 
 export class CombatSystem {
+  private scene: Phaser.Scene;
   private enemies: Enemy[] = [];
   private soldiers: Soldier[] = [];
   private graphics: Phaser.GameObjects.Graphics;
+  private enemyIconPool: Phaser.GameObjects.Image[] = [];
+  private iconTextureKey: Record<string, string> = {};
   private buildSystem: BuildSystem;
   private worldWidth: number;
   private worldHeight: number;
@@ -147,12 +153,41 @@ export class CombatSystem {
     worldHeight: number,
     rng: () => number = Math.random,
   ) {
+    this.scene = scene;
     this.graphics = scene.add.graphics();
     this.buildSystem = buildSystem;
     this.keep = keep;
     this.worldWidth = worldWidth;
     this.worldHeight = worldHeight;
     this.rng = rng;
+    this.buildIconTextures();
+  }
+
+  // Baking each troop's glyph into its own texture once (13 total, for
+  // the whole game session) instead of creating a Phaser Text object
+  // per enemy: each Text object allocates its own backing 2D canvas,
+  // and doing that once per spawned enemy exhausts the browser's canvas
+  // context budget after enough waves, crashing the game. Pooled Image
+  // objects referencing these shared textures have no such cost.
+  private buildIconTextures() {
+    for (const troop of TROOP_TYPES) {
+      const glyph = TROOP_ICON[troop.id];
+      if (!glyph) continue;
+      const key = `troop-icon-${troop.id}`;
+      this.iconTextureKey[troop.id] = key;
+      if (this.scene.textures.exists(key)) continue;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = 28;
+      canvas.height = 28;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) continue;
+      ctx.font = '20px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(glyph, 14, 15);
+      this.scene.textures.addCanvas(key, canvas);
+    }
   }
 
   get enemiesRemaining() {
@@ -205,7 +240,9 @@ export class CombatSystem {
         setupRemaining: 0,
         state: 'moving',
         avoidBias: this.rng() < 0.5 ? 1 : -1,
-        stuckTime: 0,
+        progressCheckpoint: { x, y },
+        progressTimer: 0,
+        forcingThrough: false,
       });
     }
   }
@@ -249,8 +286,8 @@ export class CombatSystem {
   }
 
   private acquireTarget(x: number, y: number): EnemyTarget {
-    const nearest = this.buildSystem.nearestStructurePoint(x, y);
-    if (nearest) return { type: 'structure', structure: nearest.structure, point: nearest.point };
+    const blocking = this.buildSystem.firstBlockingStructure({ x, y }, this.keep);
+    if (blocking) return { type: 'structure', structure: blocking.structure, point: blocking.point };
     return { type: 'keep', point: this.keep };
   }
 
@@ -265,32 +302,49 @@ export class CombatSystem {
   // first, then widen the swing (always toward the enemy's own bias so
   // it doesn't jitter) until a walkable step is found. Cheap "whisker"
   // steering that's enough to walk around a lake instead of through it.
+  //
+  // On its own this can still trap an enemy forever: a concave shore
+  // can offer a "valid" step every single frame that just shuffles it
+  // along the water's edge or in a small loop, never actually getting
+  // closer to its target - so "did whisker steering find *a* step"
+  // isn't enough to prove it isn't stuck. Instead, periodically check
+  // real progress (distance to target) since the last checkpoint; if
+  // it hasn't meaningfully closed the gap, force straight through
+  // terrain until the next checkpoint shows it's escaped.
   private stepToward(enemy: Enemy, target: Point, dt: number) {
+    enemy.progressTimer += dt;
+    if (enemy.progressTimer >= PROGRESS_CHECK_INTERVAL) {
+      const moved = Phaser.Math.Distance.Between(
+        enemy.x, enemy.y, enemy.progressCheckpoint.x, enemy.progressCheckpoint.y,
+      );
+      enemy.forcingThrough = moved < MIN_PROGRESS_DISTANCE;
+      enemy.progressCheckpoint = { x: enemy.x, y: enemy.y };
+      enemy.progressTimer = 0;
+    }
+
     const baseAngle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
     const speed = SPEED_SCALE * enemy.troop.speed * this.terrainSpeedFactor(enemy.troop, enemy.x, enemy.y);
     const stepLen = speed * dt;
-    const sign = enemy.avoidBias;
-    const offsets = [0, 0.4, -0.4, 0.8, -0.8, 1.3, -1.3, 2.0, -2.0, 2.7, -2.7];
-    for (const offset of offsets) {
-      const angle = baseAngle + offset * sign;
-      const nx = enemy.x + Math.cos(angle) * stepLen;
-      const ny = enemy.y + Math.sin(angle) * stepLen;
-      if (this.buildSystem.isBuildable(nx, ny)) {
-        enemy.x = nx;
-        enemy.y = ny;
-        enemy.stuckTime = 0;
-        return;
+
+    if (!enemy.forcingThrough) {
+      const sign = enemy.avoidBias;
+      const offsets = [0, 0.4, -0.4, 0.8, -0.8, 1.3, -1.3, 2.0, -2.0, 2.7, -2.7];
+      for (const offset of offsets) {
+        const angle = baseAngle + offset * sign;
+        const nx = enemy.x + Math.cos(angle) * stepLen;
+        const ny = enemy.y + Math.sin(angle) * stepLen;
+        if (this.buildSystem.isBuildable(nx, ny)) {
+          enemy.x = nx;
+          enemy.y = ny;
+          return;
+        }
       }
     }
-    // Boxed in on every tried heading - a concave shoreline can trap
-    // whisker steering in a local minimum with no escape. Past a short
-    // grace period, force a direct step toward the target regardless of
-    // terrain so this can never permanently soft-lock a wave.
-    enemy.stuckTime += dt;
-    if (enemy.stuckTime > STUCK_FORCE_THRESHOLD) {
-      enemy.x += Math.cos(baseAngle) * stepLen;
-      enemy.y += Math.sin(baseAngle) * stepLen;
-    }
+
+    // Either already forcing through, or every whisker angle failed
+    // this frame - push straight at the target regardless of terrain.
+    enemy.x += Math.cos(baseAngle) * stepLen;
+    enemy.y += Math.sin(baseAngle) * stepLen;
   }
 
   private structureDamage(troop: TroopType, structure: Structure): number {
@@ -408,7 +462,8 @@ export class CombatSystem {
       this.graphics.strokeCircle(s.x, s.y, stats.radius);
     }
 
-    for (const e of this.enemies) {
+    for (let i = 0; i < this.enemies.length; i++) {
+      const e = this.enemies[i];
       const visual = getEnemyVisual(e.troop);
       this.graphics.fillStyle(visual.color, 1);
       this.graphics.fillCircle(e.x, e.y, visual.radius);
@@ -425,11 +480,33 @@ export class CombatSystem {
       this.graphics.fillRect(e.x - barW / 2, e.y - visual.radius - 8, barW, 3);
       this.graphics.fillStyle(0xb0392f, 1);
       this.graphics.fillRect(e.x - barW / 2, e.y - visual.radius - 8, barW * frac, 3);
+
+      const iconKey = this.iconTextureKey[e.troop.id];
+      if (iconKey) {
+        const icon = this.getOrCreateIcon(i);
+        icon.setTexture(iconKey);
+        icon.setPosition(e.x, e.y);
+        icon.setDisplaySize(visual.radius * 1.8, visual.radius * 1.8);
+        icon.setVisible(true);
+      }
     }
+    for (let i = this.enemies.length; i < this.enemyIconPool.length; i++) {
+      this.enemyIconPool[i].setVisible(false);
+    }
+  }
+
+  private getOrCreateIcon(index: number): Phaser.GameObjects.Image {
+    let icon = this.enemyIconPool[index];
+    if (!icon) {
+      icon = this.scene.add.image(0, 0, '__DEFAULT');
+      this.enemyIconPool[index] = icon;
+    }
+    return icon;
   }
 
   clear() {
     this.enemies = [];
     this.graphics.clear();
+    for (const icon of this.enemyIconPool) icon.setVisible(false);
   }
 }

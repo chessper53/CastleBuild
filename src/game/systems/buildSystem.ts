@@ -62,6 +62,21 @@ function closestPointOnSegment(p: Point, a: Point, b: Point): Point {
   return { x: a.x + abx * t, y: a.y + aby * t };
 }
 
+function distancePointToSegment(p: Point, a: Point, b: Point): number {
+  const closest = closestPointOnSegment(p, a, b);
+  return Math.hypot(p.x - closest.x, p.y - closest.y);
+}
+
+function segmentsIntersect(p1: Point, p2: Point, p3: Point, p4: Point): boolean {
+  const d1x = p2.x - p1.x, d1y = p2.y - p1.y;
+  const d2x = p4.x - p3.x, d2y = p4.y - p3.y;
+  const denom = d1x * d2y - d1y * d2x;
+  if (Math.abs(denom) < 1e-9) return false;
+  const t = ((p3.x - p1.x) * d2y - (p3.y - p1.y) * d2x) / denom;
+  const u = ((p3.x - p1.x) * d1y - (p3.y - p1.y) * d1x) / denom;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+}
+
 // Walks a freehand-drawn polyline and cuts it into fixed-length
 // straight chunks, each of which becomes its own destructible section.
 function splitIntoSections(points: Point[], sectionLength: number): { a: Point; b: Point }[] {
@@ -175,18 +190,30 @@ export class BuildSystem {
   }
 
   /**
-   * Nearest point on ANY structure - wall section, tower, or gate -
-   * with no range cap. This is what enemy AI targets: gates and towers
-   * are just as attackable as a stretch of wall, not just decoration.
+   * The closest structure whose footprint actually blocks the straight
+   * line from `from` to `to`, if any. This is what enemy AI targets:
+   * a wall you built off to the side that doesn't stand between an
+   * attacker and the keep is irrelevant to it - it should walk past
+   * through the gap, not detour to hit a wall that was never in its way.
    */
-  nearestStructurePoint(x: number, y: number): { point: Point; structure: Structure } | null {
+  firstBlockingStructure(from: Point, to: Point): { point: Point; structure: Structure } | null {
     let best: { point: Point; structure: Structure } | null = null;
     let bestDist = Infinity;
     for (const s of this.structures) {
-      const point = s.kind === 'wallSection' ? closestPointOnSegment({ x, y }, s.a, s.b) : { x: s.x, y: s.y };
-      const d = Phaser.Math.Distance.Between(x, y, point.x, point.y);
-      if (d < bestDist) {
-        bestDist = d;
+      let point: Point;
+      let hit: boolean;
+      if (s.kind === 'wallSection') {
+        hit = segmentsIntersect(from, to, s.a, s.b);
+        point = closestPointOnSegment(from, s.a, s.b);
+      } else {
+        point = { x: s.x, y: s.y };
+        const radius = s.kind === 'tower' ? TOWER_RADIUS : GATE_SIZE / 2;
+        hit = distancePointToSegment(point, from, to) <= radius;
+      }
+      if (!hit) continue;
+      const dist = Phaser.Math.Distance.Between(from.x, from.y, point.x, point.y);
+      if (dist < bestDist) {
+        bestDist = dist;
         best = { point, structure: s };
       }
     }
