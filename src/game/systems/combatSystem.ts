@@ -27,7 +27,7 @@ interface SoldierTypeStats {
 
 // Structures/units are scaled up ~5x relative to the terrain grid so
 // castle pieces read as substantial against the map (see buildSystem.ts).
-const SCALE = 5;
+const SCALE = 3;
 
 const SOLDIER_COLOR = 0x3a5a8a;
 const SOLDIER_DARK = 0x16233a;
@@ -111,7 +111,6 @@ const BIOME_TO_TERRAIN_ID: Partial<Record<Biome, TerrainTypeId>> = {
   [Biome.Plains]: 'PLAINS',
   [Biome.Mud]: 'MUD',
   [Biome.Water]: 'WATER',
-  [Biome.River]: 'WATER',
   [Biome.Hills]: 'HILLS',
   [Biome.Forest]: 'FOREST',
   // No SAND biome exists in terrain generation yet, so that modifier

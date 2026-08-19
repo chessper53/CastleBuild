@@ -27,12 +27,12 @@ export interface PointStructure {
 
 export type Structure = WallSection | PointStructure;
 
-const UNBUILDABLE_BIOMES = new Set<Biome>([Biome.Water, Biome.River]);
+const UNBUILDABLE_BIOMES = new Set<Biome>([Biome.Water]);
 
 // Structures/units are scaled up ~5x relative to the terrain grid
 // (CELL_SIZE stays at 10) so castle pieces read as substantial against
 // the map instead of looking like specks on a huge empty terrain.
-const SCALE = 5;
+const SCALE = 3;
 
 const WALL_COLOR = 0x4a4238;
 const WALL_CORE_COLOR = 0x5c5142;

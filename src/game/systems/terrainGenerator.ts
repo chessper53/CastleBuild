@@ -2,7 +2,6 @@ import { createNoise2D } from 'simplex-noise';
 
 export const Biome = {
   Water: 'water',
-  River: 'river',
   Mud: 'mud',
   Plains: 'plains',
   Forest: 'forest',
@@ -13,7 +12,6 @@ export type Biome = (typeof Biome)[keyof typeof Biome];
 
 export const BIOME_COLOR: Record<Biome, number> = {
   [Biome.Water]: 0x2b6cb0,
-  [Biome.River]: 0x3182ce,
   [Biome.Mud]: 0x6b4a2f,
   [Biome.Plains]: 0x7cae4c,
   [Biome.Forest]: 0x2f6b3a,
@@ -104,59 +102,6 @@ function smoothBiomes(cells: TerrainCell[], width: number, height: number, itera
   }
 }
 
-function traceRivers(
-  cells: TerrainCell[],
-  width: number,
-  height: number,
-  sourceCount: number,
-  rng: () => number,
-) {
-  const idx = (x: number, y: number) => y * width + x;
-  const neighbors = [
-    [-1, 0], [1, 0], [0, -1], [0, 1],
-    [-1, -1], [1, -1], [-1, 1], [1, 1],
-  ];
-
-  const highGround: { x: number; y: number }[] = [];
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      if (cells[idx(x, y)].elevation > HILLS_LEVEL - 0.05) highGround.push({ x, y });
-    }
-  }
-  if (highGround.length === 0) return;
-
-  for (let s = 0; s < sourceCount; s++) {
-    let { x, y } = highGround[Math.floor(rng() * highGround.length)];
-    const visited = new Set<number>();
-    for (let step = 0; step < width * height; step++) {
-      const here = idx(x, y);
-      if (visited.has(here)) break;
-      visited.add(here);
-
-      if (cells[here].biome === Biome.Water) break;
-      cells[here].biome = Biome.River;
-
-      let bestX = x;
-      let bestY = y;
-      let bestElevation = cells[here].elevation;
-      for (const [dx, dy] of neighbors) {
-        const nx = x + dx;
-        const ny = y + dy;
-        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-        const n = cells[idx(nx, ny)];
-        if (n.elevation < bestElevation) {
-          bestElevation = n.elevation;
-          bestX = nx;
-          bestY = ny;
-        }
-      }
-      if (bestX === x && bestY === y) break; // local minimum, river ends (forms a small pond)
-      x = bestX;
-      y = bestY;
-    }
-  }
-}
-
 export function generateTerrain(width: number, height: number, seed: number): TerrainMap {
   const rng = mulberry32(seed);
   const elevationNoise = createNoise2D(rng);
@@ -203,7 +148,6 @@ export function generateTerrain(width: number, height: number, seed: number): Te
   }
 
   smoothBiomes(cells, width, height, 2);
-  traceRivers(cells, width, height, Math.max(2, Math.floor((width * height) / 4000)), rng);
 
   return {
     width,
