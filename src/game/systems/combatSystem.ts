@@ -72,8 +72,17 @@ const PROGRESS_CHECK_INTERVAL = 1.5; // seconds between "did I actually get clos
 const MIN_PROGRESS_DISTANCE = 25; // px an enemy must close over that interval or it's considered stuck
 const MIN_TERRAIN_SPEED_FACTOR = 0.05; // never fully immobilize - avoids permanent freezes
 
-const ENEMY_BASE_COUNT = 5;
-const ENEMY_COUNT_PER_ROUND = 3;
+// Each marker on the field is a pack of PACK_SIZE men, not one soldier -
+// fewer, tougher units per wave than before (each pack's hp is
+// multiplied accordingly), so a lone defender trading blows with a
+// pack is an actual fight instead of an instant kill.
+const PACK_SIZE = 16;
+const PACK_GRID = 4; // 4x4 formation
+const PACK_HP_MULTIPLIER = 5;
+const PACK_CONNECT_RADIUS = 75; // packs within this range of each other visually link up
+
+const ENEMY_BASE_COUNT = 3;
+const ENEMY_COUNT_PER_ROUND = 1;
 
 // Cumulative unlock schedule: a type becomes available in the spawn
 // pool from this round onward. Missing = available from round 1.
@@ -125,13 +134,21 @@ const CATEGORY_COLOR: Record<string, number> = {
   marine_raider: 0x2a6b7a,
 };
 
-// Relative to visual.radius - a tight triangle formation so a squad
-// reads as a cluster of men rather than one lone dot.
-const SQUAD_OFFSETS = [
-  { x: 0, y: -0.42 },
-  { x: -0.4, y: 0.32 },
-  { x: 0.4, y: 0.32 },
-];
+// A PACK_GRID x PACK_GRID formation (relative to visual.radius) so a
+// pack reads as an actual body of men, not a lone dot - and visibly
+// thins out row by row as it takes losses.
+const PACK_FORMATION: { x: number; y: number }[] = (() => {
+  const offsets: { x: number; y: number }[] = [];
+  for (let row = 0; row < PACK_GRID; row++) {
+    for (let col = 0; col < PACK_GRID; col++) {
+      offsets.push({
+        x: (col - (PACK_GRID - 1) / 2) / (PACK_GRID - 1),
+        y: (row - (PACK_GRID - 1) / 2) / (PACK_GRID - 1),
+      });
+    }
+  }
+  return offsets;
+})();
 
 function getEnemyVisual(troop: TroopType): { radius: number; color: number; dark: number } {
   const radius = Phaser.Math.Clamp(11 + troop.health / 14, 11, 24);
@@ -235,11 +252,12 @@ export class CombatSystem {
       const troop = this.pickTroopType(round);
       const { x, y } = this.randomEdgePoint();
       const target = this.acquireTarget(x, y);
+      const packHp = troop.health * PACK_HP_MULTIPLIER;
       this.enemies.push({
         x,
         y,
-        hp: troop.health,
-        maxHp: troop.health,
+        hp: packHp,
+        maxHp: packHp,
         troop,
         target,
         attackCooldown: 0,
@@ -494,43 +512,64 @@ export class CombatSystem {
       this.graphics.strokeCircle(s.x, s.y, stats.radius);
     }
 
+    // Packs that have converged near each other (typically via focus
+    // fire on the same breach point) visually link into one mass
+    // instead of reading as several separate dots huddled together.
+    for (let i = 0; i < this.enemies.length; i++) {
+      for (let j = i + 1; j < this.enemies.length; j++) {
+        const a = this.enemies[i];
+        const b = this.enemies[j];
+        const dist = Phaser.Math.Distance.Between(a.x, a.y, b.x, b.y);
+        if (dist > PACK_CONNECT_RADIUS) continue;
+        const visualA = getEnemyVisual(a.troop);
+        const visualB = getEnemyVisual(b.troop);
+        this.graphics.lineStyle(Math.min(visualA.radius, visualB.radius) * 1.1, visualA.color, 0.35);
+        this.graphics.beginPath();
+        this.graphics.moveTo(a.x, a.y);
+        this.graphics.lineTo(b.x, b.y);
+        this.graphics.strokePath();
+      }
+    }
+
     for (let i = 0; i < this.enemies.length; i++) {
       const e = this.enemies[i];
       const visual = getEnemyVisual(e.troop);
 
-      // Each marker is a squad, not one man - render as a small cluster
-      // that visibly thins out (fewer members drawn) as it takes
-      // losses, instead of one dot that's either "alive" or "dead".
+      // Each marker is a pack of PACK_SIZE men, not one soldier - render
+      // as a formation that visibly thins out (fewer members drawn) as
+      // it takes losses, instead of one dot that's either alive or dead.
       const hpFrac = e.hp / e.maxHp;
-      const memberCount = hpFrac > 0.66 ? 3 : hpFrac > 0.3 ? 2 : 1;
-      const memberRadius = visual.radius * 0.5;
-      for (let m = 0; m < memberCount; m++) {
-        const off = SQUAD_OFFSETS[m];
-        const mx = e.x + off.x * visual.radius;
-        const my = e.y + off.y * visual.radius;
+      const aliveMembers = Math.max(1, Math.round(PACK_SIZE * hpFrac));
+      const spread = visual.radius * 1.6;
+      const memberRadius = Math.max(2.5, visual.radius * 0.22);
+      for (let m = 0; m < aliveMembers; m++) {
+        const off = PACK_FORMATION[m];
+        const mx = e.x + off.x * spread;
+        const my = e.y + off.y * spread;
         this.graphics.fillStyle(visual.color, 1);
         this.graphics.fillCircle(mx, my, memberRadius);
-        this.graphics.lineStyle(1.5, visual.dark, 1);
+        this.graphics.lineStyle(1, visual.dark, 1);
         this.graphics.strokeCircle(mx, my, memberRadius);
       }
       if (e.state === 'setup') {
         this.graphics.lineStyle(2, 0xe0b94f, 0.9);
-        this.graphics.strokeCircle(e.x, e.y, visual.radius + 4);
+        this.graphics.strokeCircle(e.x, e.y, spread / 2 + memberRadius + 4);
       }
 
-      const barW = visual.radius * 2.4;
+      const barW = spread + memberRadius * 2;
+      const barY = e.y - spread / 2 - memberRadius - 7;
       const frac = Phaser.Math.Clamp(e.hp / e.maxHp, 0, 1);
       this.graphics.fillStyle(0x1a1512, 0.8);
-      this.graphics.fillRect(e.x - barW / 2, e.y - visual.radius - 8, barW, 3);
+      this.graphics.fillRect(e.x - barW / 2, barY, barW, 3);
       this.graphics.fillStyle(0xb0392f, 1);
-      this.graphics.fillRect(e.x - barW / 2, e.y - visual.radius - 8, barW * frac, 3);
+      this.graphics.fillRect(e.x - barW / 2, barY, barW * frac, 3);
 
       const iconKey = this.iconTextureKey[e.troop.id];
       if (iconKey) {
         const icon = this.getOrCreateIcon(i);
         icon.setTexture(iconKey);
         icon.setPosition(e.x, e.y);
-        icon.setDisplaySize(visual.radius * 1.5, visual.radius * 1.5);
+        icon.setDisplaySize(visual.radius * 1.9, visual.radius * 1.9);
         icon.setVisible(true);
       }
     }
