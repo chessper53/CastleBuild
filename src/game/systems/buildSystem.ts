@@ -29,29 +29,34 @@ export type Structure = WallSection | PointStructure;
 
 const UNBUILDABLE_BIOMES = new Set<Biome>([Biome.Water, Biome.River]);
 
+// Structures/units are scaled up ~5x relative to the terrain grid
+// (CELL_SIZE stays at 10) so castle pieces read as substantial against
+// the map instead of looking like specks on a huge empty terrain.
+const SCALE = 5;
+
 const WALL_COLOR = 0x4a4238;
 const WALL_CORE_COLOR = 0x5c5142;
-const WALL_WIDTH = 24;
-const TOWER_RADIUS = 22;
+const WALL_WIDTH = 24 * SCALE;
+const TOWER_RADIUS = 22 * SCALE;
 const TOWER_COLOR = 0x5a5142;
 const GATE_COLOR = 0x8a5a2b;
-const GATE_SIZE = 28;
+const GATE_SIZE = 28 * SCALE;
 const INVALID_COLOR = 0xb0392f;
 const VALID_COLOR = 0xd9c27e;
 const DAMAGE_COLOR = 0x7a2a20;
 
-const SECTION_LENGTH = 56;
+const SECTION_LENGTH = 56 * SCALE;
 const WALL_SECTION_MAX_HP = 70;
 const TOWER_MAX_HP = 180;
 const GATE_MAX_HP = 90;
 
-const HITBAR_WIDTH = 34;
-const HITBAR_HEIGHT = 7;
-const HITBAR_GAP = 10;
+const HITBAR_WIDTH = 34 * 2;
+const HITBAR_HEIGHT = 7 * 1.5;
+const HITBAR_GAP = 10 * 3;
 
-export const WALL_SNAP_RADIUS = 30; // wall endpoints snap to other wall vertices within this range
-export const STRUCTURE_SNAP_RADIUS = 34; // towers/gates snap onto the nearest wall within this range
-export const DELETE_TAP_RADIUS = 30; // how close a tap must be to a structure for the delete tool to pick it up
+export const WALL_SNAP_RADIUS = 30 * SCALE; // wall endpoints snap to other wall vertices within this range
+export const STRUCTURE_SNAP_RADIUS = 34 * SCALE; // towers/gates snap onto the nearest wall within this range
+export const DELETE_TAP_RADIUS = 30 * SCALE; // how close a tap must be to a structure for the delete tool to pick it up
 
 function closestPointOnSegment(p: Point, a: Point, b: Point): Point {
   const abx = b.x - a.x;

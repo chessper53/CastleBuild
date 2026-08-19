@@ -25,16 +25,20 @@ interface SoldierTypeStats {
   color: number;
 }
 
+// Structures/units are scaled up ~5x relative to the terrain grid so
+// castle pieces read as substantial against the map (see buildSystem.ts).
+const SCALE = 5;
+
 const SOLDIER_COLOR = 0x3a5a8a;
 const SOLDIER_DARK = 0x16233a;
 const SOLDIER_TYPES: Record<SoldierType, SoldierTypeStats> = {
-  // Ranges are set to comfortably out-reach archers/crossbowmen (90/75px)
-  // so a defended wall isn't ever in a dead zone against them. The
-  // slowest, longest-ranged siege engines (mangonel/ballista/trebuchet,
-  // 120-180px) still out-range even a tower guard by design - their
-  // setup time and slow reload are the intended counterplay.
-  militia: { range: 95, damage: 9, attackInterval: 0.55, radius: 7, color: SOLDIER_COLOR },
-  guard: { range: 125, damage: 14, attackInterval: 0.55, radius: 9, color: SOLDIER_COLOR },
+  // Ranges are set to comfortably out-reach archers/crossbowmen so a
+  // defended wall isn't ever in a dead zone against them. The
+  // slowest, longest-ranged siege engines (mangonel/ballista/trebuchet)
+  // still out-range even a tower guard by design - their setup time
+  // and slow reload are the intended counterplay.
+  militia: { range: 95 * SCALE, damage: 9, attackInterval: 0.55, radius: 7 * SCALE, color: SOLDIER_COLOR },
+  guard: { range: 125 * SCALE, damage: 14, attackInterval: 0.55, radius: 9 * SCALE, color: SOLDIER_COLOR },
 };
 
 interface Enemy {
@@ -64,13 +68,13 @@ interface Soldier {
 // Troop data (troopData.ts) uses small abstract units for speed/range
 // so the numbers read clearly on their own; these convert them into
 // this game's actual pixel/second and pixel-range scale.
-const SPEED_SCALE = 48;
-const RANGE_SCALE = 15;
-const MELEE_ATTACK_RANGE = 18;
+const SPEED_SCALE = 48 * SCALE;
+const RANGE_SCALE = 15 * SCALE;
+const MELEE_ATTACK_RANGE = 18 * SCALE;
 const SETUP_TIME = 2.5;
-const FOCUS_FIRE_RADIUS = 220; // squads within this range of a damaged structure reinforce it instead of hitting fresh wall
+const FOCUS_FIRE_RADIUS = 220 * SCALE; // squads within this range of a damaged structure reinforce it instead of hitting fresh wall
 const PROGRESS_CHECK_INTERVAL = 1.5; // seconds between "did I actually get closer" checks
-const MIN_PROGRESS_DISTANCE = 25; // px an enemy must close over that interval or it's considered stuck
+const MIN_PROGRESS_DISTANCE = 25 * SCALE; // px an enemy must close over that interval or it's considered stuck
 const MIN_TERRAIN_SPEED_FACTOR = 0.05; // never fully immobilize - avoids permanent freezes
 
 // Each marker on the field is a pack of PACK_SIZE men, not one soldier -
@@ -80,7 +84,7 @@ const MIN_TERRAIN_SPEED_FACTOR = 0.05; // never fully immobilize - avoids perman
 const PACK_SIZE = 16;
 const PACK_GRID = 4; // 4x4 formation
 const PACK_HP_MULTIPLIER = 5;
-const PACK_CONNECT_RADIUS = 75; // packs within this range of each other visually link up
+const PACK_CONNECT_RADIUS = 75 * SCALE; // packs within this range of each other visually link up
 
 const ENEMY_BASE_COUNT = 3;
 const ENEMY_COUNT_PER_ROUND = 1;
@@ -114,7 +118,7 @@ const BIOME_TO_TERRAIN_ID: Partial<Record<Biome, TerrainTypeId>> = {
   // is presently unreachable - kept in the data for when it does.
 };
 
-export const KEEP_SIZE = 42;
+export const KEEP_SIZE = 42 * SCALE;
 const KEEP_WALL_COLOR = 0x4a4238;
 const KEEP_ROOF_COLOR = 0x7a3a2a;
 
@@ -154,7 +158,7 @@ const PACK_FORMATION: { x: number; y: number }[] = (() => {
 })();
 
 function getEnemyVisual(troop: TroopType): { radius: number; color: number; dark: number } {
-  const radius = Phaser.Math.Clamp(11 + troop.health / 14, 11, 24);
+  const radius = Phaser.Math.Clamp(11 + troop.health / 14, 11, 24) * SCALE;
   const color = CATEGORY_COLOR[troop.id] ?? 0x8a2e2e;
   return { radius, color, dark: darken(color, 0.45) };
 }
@@ -200,7 +204,7 @@ export class CombatSystem {
   // context budget after enough waves, crashing the game. Pooled Image
   // objects referencing these shared textures have no such cost.
   private buildIconTextures() {
-    const size = 32;
+    const size = 96; // baked larger than any display size will need, so upscaling stays crisp
     for (const troop of TROOP_TYPES) {
       const key = `troop-icon-${troop.id}`;
       this.iconTextureKey[troop.id] = key;
@@ -505,22 +509,22 @@ export class CombatSystem {
     this.graphics.fillRect(this.keep.x - KEEP_SIZE / 2, this.keep.y - KEEP_SIZE / 2, KEEP_SIZE, KEEP_SIZE);
     this.graphics.fillStyle(KEEP_ROOF_COLOR, 1);
     this.graphics.fillTriangle(
-      this.keep.x - KEEP_SIZE / 2 - 4, this.keep.y - KEEP_SIZE / 2,
-      this.keep.x + KEEP_SIZE / 2 + 4, this.keep.y - KEEP_SIZE / 2,
-      this.keep.x, this.keep.y - KEEP_SIZE / 2 - 22,
+      this.keep.x - KEEP_SIZE / 2 - KEEP_SIZE * 0.1, this.keep.y - KEEP_SIZE / 2,
+      this.keep.x + KEEP_SIZE / 2 + KEEP_SIZE * 0.1, this.keep.y - KEEP_SIZE / 2,
+      this.keep.x, this.keep.y - KEEP_SIZE / 2 - KEEP_SIZE * 0.52,
     );
-    this.graphics.lineStyle(3, 0x231f1a, 1);
+    this.graphics.lineStyle(3 * SCALE, 0x231f1a, 1);
     this.graphics.strokeRect(this.keep.x - KEEP_SIZE / 2, this.keep.y - KEEP_SIZE / 2, KEEP_SIZE, KEEP_SIZE);
 
     for (const s of this.soldiers) {
       const stats = SOLDIER_TYPES[s.type];
       if (s.terrainBonus > 1) {
-        this.graphics.lineStyle(2, 0xe0b94f, 0.8);
-        this.graphics.strokeCircle(s.x, s.y, stats.radius + 4);
+        this.graphics.lineStyle(2 * SCALE * 0.4, 0xe0b94f, 0.8);
+        this.graphics.strokeCircle(s.x, s.y, stats.radius + 4 * SCALE);
       }
       this.graphics.fillStyle(stats.color, 1);
       this.graphics.fillCircle(s.x, s.y, stats.radius);
-      this.graphics.lineStyle(2, SOLDIER_DARK, 1);
+      this.graphics.lineStyle(2 * SCALE * 0.4, SOLDIER_DARK, 1);
       this.graphics.strokeCircle(s.x, s.y, stats.radius);
     }
 
@@ -560,21 +564,22 @@ export class CombatSystem {
         const my = e.y + off.y * spread;
         this.graphics.fillStyle(visual.color, 1);
         this.graphics.fillCircle(mx, my, memberRadius);
-        this.graphics.lineStyle(1, visual.dark, 1);
+        this.graphics.lineStyle(1 * SCALE * 0.4, visual.dark, 1);
         this.graphics.strokeCircle(mx, my, memberRadius);
       }
       if (e.state === 'setup') {
-        this.graphics.lineStyle(2, 0xe0b94f, 0.9);
-        this.graphics.strokeCircle(e.x, e.y, spread / 2 + memberRadius + 4);
+        this.graphics.lineStyle(2 * SCALE * 0.4, 0xe0b94f, 0.9);
+        this.graphics.strokeCircle(e.x, e.y, spread / 2 + memberRadius + 4 * SCALE);
       }
 
+      const barH = 3 * SCALE * 0.5;
       const barW = spread + memberRadius * 2;
-      const barY = e.y - spread / 2 - memberRadius - 7;
+      const barY = e.y - spread / 2 - memberRadius - 7 * SCALE * 0.5;
       const frac = Phaser.Math.Clamp(e.hp / e.maxHp, 0, 1);
       this.graphics.fillStyle(0x1a1512, 0.8);
-      this.graphics.fillRect(e.x - barW / 2, barY, barW, 3);
+      this.graphics.fillRect(e.x - barW / 2, barY, barW, barH);
       this.graphics.fillStyle(0xb0392f, 1);
-      this.graphics.fillRect(e.x - barW / 2, barY, barW * frac, 3);
+      this.graphics.fillRect(e.x - barW / 2, barY, barW * frac, barH);
 
       const iconKey = this.iconTextureKey[e.troop.id];
       if (iconKey) {

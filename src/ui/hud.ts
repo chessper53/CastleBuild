@@ -57,7 +57,7 @@ export function setupHud() {
   top.innerHTML = `
     <span class="hud-round">Round 1</span>
     <div class="hud-resources">
-      <span class="hud-resource"><span class="icon">\u{2694}\u{FE0F}</span><span class="soldiers-count">50</span></span>
+      <span class="hud-resource"><span class="icon">\u{2694}\u{FE0F}</span><span class="soldiers-count">0</span></span>
     </div>
   `;
   const roundLabel = top.querySelector('.hud-round') as HTMLSpanElement;
