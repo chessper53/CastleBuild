@@ -51,6 +51,7 @@ const HITBAR_GAP = 10;
 
 export const WALL_SNAP_RADIUS = 30; // wall endpoints snap to other wall vertices within this range
 export const STRUCTURE_SNAP_RADIUS = 34; // towers/gates snap onto the nearest wall within this range
+export const DELETE_TAP_RADIUS = 30; // how close a tap must be to a structure for the delete tool to pick it up
 
 function closestPointOnSegment(p: Point, a: Point, b: Point): Point {
   const abx = b.x - a.x;
@@ -237,6 +238,27 @@ export class BuildSystem {
     this.render();
   }
 
+  /** Nearest structure to a point within radius, for the delete tool's tap-to-remove and hover preview. */
+  nearestStructure(x: number, y: number, radius: number): Structure | null {
+    let best: Structure | null = null;
+    let bestDist = radius;
+    for (const s of this.structures) {
+      const point = s.kind === 'wallSection' ? closestPointOnSegment({ x, y }, s.a, s.b) : { x: s.x, y: s.y };
+      const d = Phaser.Math.Distance.Between(x, y, point.x, point.y);
+      if (d < bestDist) {
+        bestDist = d;
+        best = s;
+      }
+    }
+    return best;
+  }
+
+  /** Removes a structure outright (the delete tool - no combat involved). */
+  remove(target: Structure) {
+    this.structures = this.structures.filter((s) => s !== target);
+    this.render();
+  }
+
   /** Applies damage to a structure; removes and returns true if it's destroyed. */
   damage(target: Structure, amount: number): boolean {
     target.hp -= amount;
@@ -254,6 +276,22 @@ export class BuildSystem {
     if (points.length === 0) return;
     const valid = points.every((p) => this.isBuildable(p.x, p.y));
     strokeThickPath(preview, points, valid ? VALID_COLOR : INVALID_COLOR, WALL_WIDTH, 0.65);
+  }
+
+  previewDeleteTarget(preview: Phaser.GameObjects.Graphics, structure: Structure | null) {
+    preview.clear();
+    if (!structure) return;
+    preview.lineStyle(4, INVALID_COLOR, 0.9);
+    if (structure.kind === 'wallSection') {
+      preview.beginPath();
+      preview.moveTo(structure.a.x, structure.a.y);
+      preview.lineTo(structure.b.x, structure.b.y);
+      preview.strokePath();
+    } else if (structure.kind === 'tower') {
+      preview.strokeCircle(structure.x, structure.y, TOWER_RADIUS + 4);
+    } else {
+      preview.strokeRect(structure.x - GATE_SIZE / 2 - 4, structure.y - GATE_SIZE / 2 - 4, GATE_SIZE + 8, GATE_SIZE + 8);
+    }
   }
 
   previewPoint(preview: Phaser.GameObjects.Graphics, kind: 'tower' | 'gate', x: number, y: number, valid: boolean) {

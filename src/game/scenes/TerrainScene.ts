@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { generateTerrain, type TerrainMap } from '../systems/terrainGenerator';
 import { renderTerrainCanvas } from '../systems/terrainRenderer';
-import { BuildSystem, type Point } from '../systems/buildSystem';
+import { BuildSystem, DELETE_TAP_RADIUS, type Point } from '../systems/buildSystem';
 import { CombatSystem, KEEP_SIZE } from '../systems/combatSystem';
 import { onSetTool, setTool, onStartRound, publishGameState, type ToolType, type Phase } from '../events';
 
@@ -214,6 +214,16 @@ export class TerrainScene extends Phaser.Scene {
         return;
       }
 
+      if (this.activeTool === 'delete') {
+        const target = this.buildSystem.nearestStructure(world.x, world.y, DELETE_TAP_RADIUS);
+        if (target) {
+          this.buildSystem.remove(target);
+          this.publishState();
+        }
+        this.previewGraphics.clear();
+        return;
+      }
+
       // tower / gate: can only be placed on top of an existing wall
       const snapped = this.buildSystem.snapToWallLine(world.x, world.y);
       if (snapped) {
@@ -274,6 +284,13 @@ export class TerrainScene extends Phaser.Scene {
           snapped ? snapped.y : world.y,
           !!snapped,
         );
+        return;
+      }
+
+      if (this.activeTool === 'delete') {
+        const world = cam.getWorldPoint(pointer.x, pointer.y);
+        const target = this.buildSystem.nearestStructure(world.x, world.y, DELETE_TAP_RADIUS);
+        this.buildSystem.previewDeleteTarget(this.previewGraphics, target);
       }
     });
 

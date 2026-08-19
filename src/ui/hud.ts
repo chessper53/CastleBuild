@@ -15,6 +15,7 @@ const TOOLS: ToolDef[] = [
   { tool: 'wall', label: 'Wall', icon: '\u{1F9F1}', hint: 'Drag to raise a wall' },
   { tool: 'tower', label: 'Tower', icon: '\u{1F3F0}', hint: 'Tap a wall to place a tower' },
   { tool: 'gate', label: 'Gate', icon: '\u{1F6AA}', hint: 'Tap a wall to place a gate' },
+  { tool: 'delete', label: 'Demolish', icon: '\u{1F528}', hint: 'Tap a structure to remove it' },
 ];
 
 function troopCardHtml(t: TroopType): string {

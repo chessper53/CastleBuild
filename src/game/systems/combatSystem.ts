@@ -67,6 +67,7 @@ const SPEED_SCALE = 48;
 const RANGE_SCALE = 15;
 const MELEE_ATTACK_RANGE = 18;
 const SETUP_TIME = 2.5;
+const FOCUS_FIRE_RADIUS = 220; // squads within this range of a damaged structure reinforce it instead of hitting fresh wall
 const PROGRESS_CHECK_INTERVAL = 1.5; // seconds between "did I actually get closer" checks
 const MIN_PROGRESS_DISTANCE = 25; // px an enemy must close over that interval or it's considered stuck
 const MIN_TERRAIN_SPEED_FACTOR = 0.05; // never fully immobilize - avoids permanent freezes
@@ -123,6 +124,14 @@ const CATEGORY_COLOR: Record<string, number> = {
   crossbowman: 0xa8622a,
   marine_raider: 0x2a6b7a,
 };
+
+// Relative to visual.radius - a tight triangle formation so a squad
+// reads as a cluster of men rather than one lone dot.
+const SQUAD_OFFSETS = [
+  { x: 0, y: -0.42 },
+  { x: -0.4, y: 0.32 },
+  { x: 0.4, y: 0.32 },
+];
 
 function getEnemyVisual(troop: TroopType): { radius: number; color: number; dark: number } {
   const radius = Phaser.Math.Clamp(11 + troop.health / 14, 11, 24);
@@ -284,8 +293,34 @@ export class CombatSystem {
 
   private acquireTarget(x: number, y: number): EnemyTarget {
     const blocking = this.buildSystem.firstBlockingStructure({ x, y }, this.keep);
-    if (blocking) return { type: 'structure', structure: blocking.structure, point: blocking.point };
-    return { type: 'keep', point: this.keep };
+    if (!blocking) return { type: 'keep', point: this.keep };
+
+    // Focus fire: reinforce a structure that's already being chipped
+    // away nearby instead of always beelining for the literal nearest
+    // one - concentrated squads breach a wall faster than everyone
+    // spreading out across separate untouched sections.
+    const reinforce = this.findReinforceableTarget(x, y);
+    if (reinforce) return { type: 'structure', structure: reinforce.structure, point: reinforce.point };
+
+    return { type: 'structure', structure: blocking.structure, point: blocking.point };
+  }
+
+  private findReinforceableTarget(x: number, y: number): { structure: Structure; point: Point } | null {
+    let best: { structure: Structure; point: Point } | null = null;
+    let bestDist = FOCUS_FIRE_RADIUS;
+    for (const s of this.buildSystem.getStructures()) {
+      if (s.hp >= s.maxHp) continue; // only already-damaged structures count as "under attack"
+      const point = s.kind === 'wallSection' ? { x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2 } : { x: s.x, y: s.y };
+      const dist = Phaser.Math.Distance.Between(x, y, point.x, point.y);
+      if (dist >= bestDist) continue;
+      // Must be the thing actually blocking this path too, not a
+      // damaged structure sitting behind a lake or another wall.
+      const blocking = this.buildSystem.firstBlockingStructure({ x, y }, point);
+      if (!blocking || blocking.structure !== s) continue;
+      bestDist = dist;
+      best = { structure: s, point };
+    }
+    return best;
   }
 
   private terrainSpeedFactor(troop: TroopType, x: number, y: number): number {
@@ -462,10 +497,22 @@ export class CombatSystem {
     for (let i = 0; i < this.enemies.length; i++) {
       const e = this.enemies[i];
       const visual = getEnemyVisual(e.troop);
-      this.graphics.fillStyle(visual.color, 1);
-      this.graphics.fillCircle(e.x, e.y, visual.radius);
-      this.graphics.lineStyle(2, visual.dark, 1);
-      this.graphics.strokeCircle(e.x, e.y, visual.radius);
+
+      // Each marker is a squad, not one man - render as a small cluster
+      // that visibly thins out (fewer members drawn) as it takes
+      // losses, instead of one dot that's either "alive" or "dead".
+      const hpFrac = e.hp / e.maxHp;
+      const memberCount = hpFrac > 0.66 ? 3 : hpFrac > 0.3 ? 2 : 1;
+      const memberRadius = visual.radius * 0.5;
+      for (let m = 0; m < memberCount; m++) {
+        const off = SQUAD_OFFSETS[m];
+        const mx = e.x + off.x * visual.radius;
+        const my = e.y + off.y * visual.radius;
+        this.graphics.fillStyle(visual.color, 1);
+        this.graphics.fillCircle(mx, my, memberRadius);
+        this.graphics.lineStyle(1.5, visual.dark, 1);
+        this.graphics.strokeCircle(mx, my, memberRadius);
+      }
       if (e.state === 'setup') {
         this.graphics.lineStyle(2, 0xe0b94f, 0.9);
         this.graphics.strokeCircle(e.x, e.y, visual.radius + 4);
