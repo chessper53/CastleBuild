@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
-import { generateTerrain, BIOME_COLOR, type TerrainMap } from '../systems/terrainGenerator';
+import { generateTerrain, type TerrainMap } from '../systems/terrainGenerator';
+import { renderTerrainCanvas } from '../systems/terrainRenderer';
 import { BuildSystem, type Point } from '../systems/buildSystem';
 import { CombatSystem, KEEP_SIZE } from '../systems/combatSystem';
 import { onSetTool, setTool, onStartRound, publishGameState, type ToolType, type Phase } from '../events';
@@ -143,19 +144,16 @@ export class TerrainScene extends Phaser.Scene {
   private renderTerrain() {
     this.worldWidth = this.terrain.width * CELL_SIZE;
     this.worldHeight = this.terrain.height * CELL_SIZE;
-    const rt = this.add.renderTexture(0, 0, this.worldWidth, this.worldHeight).setOrigin(0, 0);
-    const g = this.add.graphics();
 
-    for (let y = 0; y < this.terrain.height; y++) {
-      for (let x = 0; x < this.terrain.width; x++) {
-        const cell = this.terrain.get(x, y);
-        g.fillStyle(BIOME_COLOR[cell.biome], 1);
-        g.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
-      }
-    }
-
-    rt.draw(g, 0, 0);
-    g.destroy();
+    // Baking one pixel per cell (instead of a hard-edged CELL_SIZE x
+    // CELL_SIZE fillRect per cell) and displaying it scaled up with
+    // linear texture filtering lets the GPU's own interpolation smooth
+    // out coastlines and biome borders for free - no art assets needed.
+    const key = 'terrain-canvas';
+    if (this.textures.exists(key)) this.textures.remove(key);
+    this.textures.addCanvas(key, renderTerrainCanvas(this.terrain));
+    this.textures.get(key).setFilter(Phaser.Textures.FilterMode.LINEAR);
+    this.add.image(0, 0, key).setOrigin(0, 0).setDisplaySize(this.worldWidth, this.worldHeight);
 
     // Bounds match the map exactly so the camera can never pan past its edges.
     this.cameras.main.setBounds(0, 0, this.worldWidth, this.worldHeight);
