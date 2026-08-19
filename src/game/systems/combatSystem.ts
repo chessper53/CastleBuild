@@ -153,7 +153,25 @@ export class CombatSystem {
     }
   }
 
+  // The map border isn't guaranteed to be land - it can dip through a
+  // lake or river. Spawning there would drop an enemy in water with no
+  // walkable direction for its whisker-steering to find, freezing it
+  // in place forever. Retry until we land on solid ground.
   private randomEdgePoint(): Point {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const p = this.rawEdgePoint();
+      if (this.buildSystem.isBuildable(p.x, p.y)) return p;
+    }
+    // Every sampled edge point was water (rare) - march inward from the
+    // top edge until we hit land.
+    let p: Point = { x: this.worldWidth / 2, y: 0 };
+    while (!this.buildSystem.isBuildable(p.x, p.y) && p.y < this.worldHeight) {
+      p = { x: p.x, y: p.y + 20 };
+    }
+    return p;
+  }
+
+  private rawEdgePoint(): Point {
     const side = Math.floor(this.rng() * 4);
     const margin = 4;
     switch (side) {
@@ -182,7 +200,7 @@ export class CombatSystem {
     const baseAngle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
     const stepLen = enemy.speed * dt;
     const sign = enemy.avoidBias;
-    const offsets = [0, 0.4, -0.4, 0.8, -0.8, 1.3, -1.3, 2.0, -2.0];
+    const offsets = [0, 0.4, -0.4, 0.8, -0.8, 1.3, -1.3, 2.0, -2.0, 2.7, -2.7];
     for (const offset of offsets) {
       const angle = baseAngle + offset * sign;
       const nx = enemy.x + Math.cos(angle) * stepLen;
