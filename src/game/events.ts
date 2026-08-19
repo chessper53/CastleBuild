@@ -30,6 +30,14 @@ export function onStartRound(handler: () => void) {
   gameEvents.addEventListener('start-round', handler);
 }
 
+export function requestSetSpeed(speed: number) {
+  gameEvents.dispatchEvent(new CustomEvent<number>('set-speed', { detail: speed }));
+}
+
+export function onSetSpeed(handler: (speed: number) => void) {
+  gameEvents.addEventListener('set-speed', (e) => handler((e as CustomEvent<number>).detail));
+}
+
 export function publishGameState(payload: GameStatePayload) {
   gameEvents.dispatchEvent(new CustomEvent<GameStatePayload>('game-state', { detail: payload }));
 }

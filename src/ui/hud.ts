@@ -1,4 +1,4 @@
-import { setTool, onSetTool, requestStartRound, onGameState, type ToolType, type GameStatePayload } from '../game/events';
+import { setTool, onSetTool, requestStartRound, requestSetSpeed, onGameState, type ToolType, type GameStatePayload } from '../game/events';
 import { TROOP_TYPES, UNSPAWNABLE_TROOP_IDS, type TroopType } from '../game/systems/troopData';
 import { troopIconDataUrl } from '../game/systems/troopIconsSvg';
 import './theme.css';
@@ -59,9 +59,19 @@ export function setupHud() {
     <div class="hud-resources">
       <span class="hud-resource"><span class="icon">\u{2694}\u{FE0F}</span><span class="soldiers-count">0</span></span>
     </div>
+    <button class="speed-btn">1×</button>
   `;
   const roundLabel = top.querySelector('.hud-round') as HTMLSpanElement;
   const soldiersCount = top.querySelector('.soldiers-count') as HTMLSpanElement;
+  const speedBtn = top.querySelector('.speed-btn') as HTMLButtonElement;
+
+  let fastForward = false;
+  speedBtn.addEventListener('click', () => {
+    fastForward = !fastForward;
+    speedBtn.textContent = fastForward ? '5×' : '1×';
+    speedBtn.classList.toggle('active', fastForward);
+    requestSetSpeed(fastForward ? 5 : 1);
+  });
 
   const codexBtn = document.createElement('button');
   codexBtn.className = 'hud-panel codex-btn';

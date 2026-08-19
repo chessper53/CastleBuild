@@ -4,14 +4,20 @@ import { renderTerrainCanvas } from '../systems/terrainRenderer';
 import { BuildSystem, DELETE_TAP_RADIUS, type Point } from '../systems/buildSystem';
 import { CombatSystem, KEEP_SIZE } from '../systems/combatSystem';
 import { TROOP_ICON_SVG } from '../systems/troopIconsSvg';
-import { onSetTool, setTool, onStartRound, publishGameState, type ToolType, type Phase } from '../events';
+import { onSetTool, setTool, onStartRound, onSetSpeed, publishGameState, type ToolType, type Phase } from '../events';
 
 const ICON_RASTER_SIZE = 160; // px the SVG icons are rasterized to - comfortably above any in-game display size
 
 const TARGET_CELL_COUNT = 256 * 256; // total detail budget, split between axes to match screen aspect
 const MIN_MAP_CELLS = 96;
 const MAX_MAP_CELLS = 420;
-const CELL_SIZE = 10;
+// World px per terrain cell. Structures (buildSystem.ts) are sized in
+// absolute world px via their own SCALE constant, independent of this
+// - shrinking CELL_SIZE shrinks the map's total footprint (each hill,
+// lake, forest patch spans fewer world px) without touching structure
+// size, so the castle reads as substantial against its surroundings
+// instead of a speck on a huge terrain.
+const CELL_SIZE = 5;
 const MIN_WALL_POINTS = 2;
 const MIN_POINT_SPACING = 10 * 3; // world px between recorded points while freehand-drawing a wall - matches the structure scale
 const TAP_THRESHOLD = 8; // screen px of movement below which a pointerdown/up pair counts as a tap, not a drag
@@ -32,6 +38,7 @@ export class TerrainScene extends Phaser.Scene {
   private phase: Phase = 'placement';
   private round = 1;
   private statePublishTimer = 0;
+  private timeScale = 1;
 
   private activeTool: ToolType = 'none';
   private isPanning = false;
@@ -79,6 +86,10 @@ export class TerrainScene extends Phaser.Scene {
       this.previewGraphics.clear();
     });
 
+    onSetSpeed((speed) => {
+      this.timeScale = speed;
+    });
+
     onStartRound(() => {
       if (this.phase !== 'build' || !this.combatSystem || !this.hasGate()) return;
       this.activeTool = 'none';
@@ -94,7 +105,7 @@ export class TerrainScene extends Phaser.Scene {
 
   update(_time: number, delta: number) {
     if (this.phase !== 'combat' || !this.combatSystem) return;
-    const dt = delta / 1000;
+    const dt = (delta / 1000) * this.timeScale;
     this.combatSystem.update(dt);
 
     this.statePublishTimer += dt;

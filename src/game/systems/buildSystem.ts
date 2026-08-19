@@ -29,9 +29,9 @@ export type Structure = WallSection | PointStructure;
 
 const UNBUILDABLE_BIOMES = new Set<Biome>([Biome.Water]);
 
-// Structures/units are scaled up ~5x relative to the terrain grid
-// (CELL_SIZE stays at 10) so castle pieces read as substantial against
-// the map instead of looking like specks on a huge empty terrain.
+// Structure sizes are absolute world px, independent of the terrain's
+// own CELL_SIZE (see TerrainScene.ts) - see there for how the two
+// scales interact.
 const SCALE = 3;
 
 const WALL_COLOR = 0x4a4238;
