@@ -98,7 +98,7 @@ const SPAWN_INTERVAL_START_DAYS = 0.35; // gap between packs right when the enca
 const SPAWN_INTERVAL_MIN_DAYS = 0.08; // floor - sieges never get faster than this no matter how long they run
 const SPAWN_INTERVAL_RAMP_DAYS = 0.018; // interval shrinks by this many days for each day survived past activation
 const ENCAMPMENT_SPAWN_JITTER = 55 * SCALE; // packs spawn near the encampment, not stacked exactly on it
-const ENCAMPMENT_EDGE_INSET = 0.1; // fraction of world width/height kept clear of the literal map border
+const ENCAMPMENT_EDGE_INSET = 0.3; // fraction of world width/height kept clear of the literal map border - pulled well inward so it reads as part of the map, not a speck out at the fringe
 
 // Power tier per troop type (reused from the old unlock ordering).
 // Spawn weighting (pickTroopType) peaks around whichever tier matches
