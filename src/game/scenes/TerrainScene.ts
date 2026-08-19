@@ -3,7 +3,9 @@ import { generateTerrain, BIOME_COLOR, type TerrainMap } from '../systems/terrai
 import { BuildSystem, type Point } from '../systems/buildSystem';
 import { onSetTool, type ToolType } from '../events';
 
-const MAP_CELLS = 256;
+const TARGET_CELL_COUNT = 256 * 256; // total detail budget, split between axes to match screen aspect
+const MIN_MAP_CELLS = 96;
+const MAX_MAP_CELLS = 420;
 const CELL_SIZE = 10;
 const MIN_WALL_POINTS = 2;
 const MIN_POINT_SPACING = 10; // world px between recorded points while freehand-drawing a wall
@@ -12,7 +14,8 @@ export class TerrainScene extends Phaser.Scene {
   private terrain!: TerrainMap;
   private buildSystem!: BuildSystem;
   private previewGraphics!: Phaser.GameObjects.Graphics;
-  private worldSize = 0;
+  private worldWidth = 0;
+  private worldHeight = 0;
 
   private activeTool: ToolType = 'none';
   private isPanning = false;
@@ -28,7 +31,10 @@ export class TerrainScene extends Phaser.Scene {
 
   create() {
     const seed = Math.floor(Math.random() * 0xffffffff);
-    this.terrain = generateTerrain(MAP_CELLS, MAP_CELLS, seed);
+    const aspect = this.scale.width / this.scale.height;
+    const cellsX = Phaser.Math.Clamp(Math.round(Math.sqrt(TARGET_CELL_COUNT * aspect)), MIN_MAP_CELLS, MAX_MAP_CELLS);
+    const cellsY = Phaser.Math.Clamp(Math.round(Math.sqrt(TARGET_CELL_COUNT / aspect)), MIN_MAP_CELLS, MAX_MAP_CELLS);
+    this.terrain = generateTerrain(cellsX, cellsY, seed);
     this.renderTerrain();
 
     this.buildSystem = new BuildSystem(this, this.terrain, CELL_SIZE);
@@ -48,8 +54,9 @@ export class TerrainScene extends Phaser.Scene {
   }
 
   private renderTerrain() {
-    this.worldSize = MAP_CELLS * CELL_SIZE;
-    const rt = this.add.renderTexture(0, 0, this.worldSize, this.worldSize).setOrigin(0, 0);
+    this.worldWidth = this.terrain.width * CELL_SIZE;
+    this.worldHeight = this.terrain.height * CELL_SIZE;
+    const rt = this.add.renderTexture(0, 0, this.worldWidth, this.worldHeight).setOrigin(0, 0);
     const g = this.add.graphics();
 
     for (let y = 0; y < this.terrain.height; y++) {
@@ -64,10 +71,10 @@ export class TerrainScene extends Phaser.Scene {
     g.destroy();
 
     this.cameras.main.setBounds(
-      -this.worldSize * 0.25,
-      -this.worldSize * 0.25,
-      this.worldSize * 1.5,
-      this.worldSize * 1.5,
+      -this.worldWidth * 0.25,
+      -this.worldHeight * 0.25,
+      this.worldWidth * 1.5,
+      this.worldHeight * 1.5,
     );
   }
 
@@ -75,14 +82,14 @@ export class TerrainScene extends Phaser.Scene {
     this.fitCameraToScreen();
   }
 
-  // Zooms so the generated map always covers the visible viewport,
-  // instead of showing at a fixed 1-world-unit-per-pixel scale that
-  // leaves letterboxing on screens wider than the map itself.
+  // The map is generated to match the screen's aspect ratio (see
+  // create()), so covering the viewport here needs little to no
+  // cropping on either axis.
   private fitCameraToScreen() {
     const cam = this.cameras.main;
-    const fitZoom = Math.max(this.scale.width / this.worldSize, this.scale.height / this.worldSize);
-    cam.setZoom(fitZoom * 1.05);
-    cam.centerOn(this.worldSize / 2, this.worldSize / 2);
+    const fitZoom = Math.max(this.scale.width / this.worldWidth, this.scale.height / this.worldHeight);
+    cam.setZoom(fitZoom * 1.02);
+    cam.centerOn(this.worldWidth / 2, this.worldHeight / 2);
   }
 
   private setupInput() {
