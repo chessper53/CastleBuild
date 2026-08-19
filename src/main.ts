@@ -1,5 +1,8 @@
 import Phaser from 'phaser';
 import { TerrainScene } from './game/scenes/TerrainScene';
+import { setupHud } from './ui/hud';
+
+setupHud();
 
 new Phaser.Game({
   type: Phaser.AUTO,
@@ -8,6 +11,9 @@ new Phaser.Game({
   scale: {
     mode: Phaser.Scale.RESIZE,
     autoCenter: Phaser.Scale.CENTER_BOTH,
+  },
+  input: {
+    activePointers: 2,
   },
   scene: [TerrainScene],
 });

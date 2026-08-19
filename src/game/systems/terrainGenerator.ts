@@ -33,7 +33,7 @@ export interface TerrainMap {
   get(x: number, y: number): TerrainCell;
 }
 
-const WATER_LEVEL = 0.32;
+const WATER_LEVEL = 0.24;
 const HILLS_LEVEL = 0.68;
 
 function classify(elevation: number, moisture: number): Biome {
@@ -42,6 +42,66 @@ function classify(elevation: number, moisture: number): Biome {
   if (elevation < WATER_LEVEL + 0.06 && moisture > 0.55) return Biome.Mud;
   if (moisture > 0.55) return Biome.Forest;
   return Biome.Plains;
+}
+
+// Averages each cell with its neighbors so noise doesn't produce
+// single-cell speckling; this is what turns jagged coastlines into
+// smooth, organic-looking ones while keeping the grid resolution.
+function boxBlur(values: Float32Array, width: number, height: number, radius: number): Float32Array {
+  const out = new Float32Array(values.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let sum = 0;
+      let count = 0;
+      for (let dy = -radius; dy <= radius; dy++) {
+        const ny = y + dy;
+        if (ny < 0 || ny >= height) continue;
+        for (let dx = -radius; dx <= radius; dx++) {
+          const nx = x + dx;
+          if (nx < 0 || nx >= width) continue;
+          sum += values[ny * width + nx];
+          count++;
+        }
+      }
+      out[y * width + x] = sum / count;
+    }
+  }
+  return out;
+}
+
+// Cleans up leftover single-cell "speckle" biomes by replacing a cell
+// with whichever biome is most common among its neighbors.
+function smoothBiomes(cells: TerrainCell[], width: number, height: number, iterations: number) {
+  for (let iter = 0; iter < iterations; iter++) {
+    const next = cells.map((c) => c.biome);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const here = cells[y * width + x];
+        if (here.biome === Biome.Water) continue; // keep coastlines from the elevation field, not majority-vote
+
+        const counts = new Map<Biome, number>();
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+            const b = cells[ny * width + nx].biome;
+            counts.set(b, (counts.get(b) ?? 0) + 1);
+          }
+        }
+        let best: Biome = here.biome;
+        let bestCount = -1;
+        for (const [biome, count] of counts) {
+          if (count > bestCount) {
+            best = biome;
+            bestCount = count;
+          }
+        }
+        next[y * width + x] = best;
+      }
+    }
+    for (let i = 0; i < cells.length; i++) cells[i].biome = next[i];
+  }
 }
 
 function traceRivers(
@@ -103,7 +163,8 @@ export function generateTerrain(width: number, height: number, seed: number): Te
   const moistureNoise = createNoise2D(rng);
   const detailNoise = createNoise2D(rng);
 
-  const cells: TerrainCell[] = new Array(width * height);
+  let elevationField: Float32Array<ArrayBufferLike> = new Float32Array(width * height);
+  let moistureField: Float32Array<ArrayBufferLike> = new Float32Array(width * height);
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -116,19 +177,32 @@ export function generateTerrain(width: number, height: number, seed: number): Te
         detailNoise(nx * 11, ny * 11) * 0.15;
       elevation = (elevation + 1) / 2;
 
+      // Gentle radial falloff so land masses stay coastal rather than
+      // being eaten from the edges inward.
       const distFromCenter = Math.sqrt(nx * nx + ny * ny) * 1.4;
-      elevation = elevation * (1 - distFromCenter * 0.5);
+      elevation = elevation * (1 - distFromCenter * 0.3);
       elevation = clamp(elevation, 0, 1);
 
       let moisture = moistureNoise(nx * 3, ny * 3) * 0.7 + detailNoise(nx * 8, ny * 8) * 0.3;
       moisture = (moisture + 1) / 2;
       moisture = clamp(moisture, 0, 1);
 
-      const biome = classify(elevation, moisture);
-      cells[y * width + x] = { elevation, moisture, biome };
+      elevationField[y * width + x] = elevation;
+      moistureField[y * width + x] = moisture;
     }
   }
 
+  elevationField = boxBlur(elevationField, width, height, 3);
+  moistureField = boxBlur(moistureField, width, height, 2);
+
+  const cells: TerrainCell[] = new Array(width * height);
+  for (let i = 0; i < cells.length; i++) {
+    const elevation = elevationField[i];
+    const moisture = moistureField[i];
+    cells[i] = { elevation, moisture, biome: classify(elevation, moisture) };
+  }
+
+  smoothBiomes(cells, width, height, 2);
   traceRivers(cells, width, height, Math.max(2, Math.floor((width * height) / 4000)), rng);
 
   return {

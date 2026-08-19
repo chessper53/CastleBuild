@@ -1,0 +1,142 @@
+:root {
+  --stone-dark: #241f1a;
+  --stone: #362f27;
+  --stone-light: #4a4136;
+  --iron: #17130f;
+  --parchment: #e8d9b0;
+  --parchment-dim: #b8a074;
+  --gold: #c19a3e;
+  --gold-bright: #e0b94f;
+  --danger: #a8382c;
+
+  --font-display: 'Cinzel', serif;
+  --font-body: 'EB Garamond', serif;
+
+  --tap: 52px;
+}
+
+#ui {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  font-family: var(--font-body);
+  color: var(--parchment);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.hud-panel {
+  pointer-events: auto;
+  background: linear-gradient(180deg, var(--stone) 0%, var(--stone-dark) 100%);
+  border: 2px solid var(--iron);
+  box-shadow:
+    inset 0 0 0 1px rgba(193, 154, 62, 0.25),
+    0 3px 10px rgba(0, 0, 0, 0.5);
+}
+
+/* Top HUD */
+.hud-top {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: clamp(10px, 3vw, 22px);
+  padding: 8px clamp(14px, 4vw, 24px);
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+.hud-round {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(14px, 3.2vw, 18px);
+  letter-spacing: 0.04em;
+  color: var(--gold-bright);
+  text-transform: uppercase;
+}
+
+.hud-resources {
+  display: flex;
+  gap: clamp(8px, 2.5vw, 16px);
+}
+
+.hud-resource {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: clamp(13px, 3vw, 16px);
+  color: var(--parchment);
+}
+
+.hud-resource .icon {
+  font-size: 1.1em;
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.6));
+}
+
+/* Bottom build toolbar */
+.hud-bottom {
+  position: fixed;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 10px;
+}
+
+.tool-btn {
+  pointer-events: auto;
+  width: var(--tap);
+  height: var(--tap);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  background: linear-gradient(180deg, var(--stone-light) 0%, var(--stone) 100%);
+  border: 2px solid var(--iron);
+  border-radius: 8px;
+  color: var(--parchment-dim);
+  font-family: var(--font-body);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.tool-btn .icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.tool-btn:active {
+  transform: translateY(1px);
+}
+
+.tool-btn.active {
+  background: linear-gradient(180deg, var(--gold) 0%, #8a6c2a 100%);
+  border-color: var(--gold-bright);
+  color: var(--iron);
+}
+
+/* Build-mode hint banner */
+.hud-hint {
+  position: fixed;
+  top: max(60px, calc(env(safe-area-inset-top) + 52px));
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: clamp(12px, 3vw, 14px);
+  color: var(--parchment-dim);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.hud-hint.visible {
+  opacity: 1;
+}
