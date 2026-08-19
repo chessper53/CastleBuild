@@ -2,7 +2,6 @@ import Phaser from 'phaser';
 import { BuildSystem, type Point, type PointStructure, type Structure, type WallSection } from './buildSystem';
 import { Biome } from './terrainGenerator';
 import { TROOP_TYPES, TROOP_TYPE_BY_ID, UNSPAWNABLE_TROOP_IDS, type TerrainTypeId, type TroopType } from './troopData';
-import { drawTroopIcon } from './troopIcons';
 
 interface StructureTarget {
   type: 'structure';
@@ -193,30 +192,10 @@ export class CombatSystem {
     this.worldWidth = worldWidth;
     this.worldHeight = worldHeight;
     this.rng = rng;
-    this.buildIconTextures();
-  }
-
-  // Baking each troop's icon into its own texture once (13 total, for
-  // the whole game session) instead of creating a Phaser Text object
-  // per enemy: each Text object allocates its own backing 2D canvas,
-  // and doing that once per spawned enemy exhausts the browser's canvas
-  // context budget after enough waves, crashing the game. Pooled Image
-  // objects referencing these shared textures have no such cost.
-  private buildIconTextures() {
-    const size = 96; // baked larger than any display size will need, so upscaling stays crisp
-    for (const troop of TROOP_TYPES) {
-      const key = `troop-icon-${troop.id}`;
-      this.iconTextureKey[troop.id] = key;
-      if (this.scene.textures.exists(key)) continue;
-
-      const canvas = document.createElement('canvas');
-      canvas.width = size;
-      canvas.height = size;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) continue;
-      drawTroopIcon(ctx, troop.id, size);
-      this.scene.textures.addCanvas(key, canvas);
-    }
+    // Icon textures are loaded up front by the scene's preload() (see
+    // TerrainScene) - just record the keys, pooled Image objects
+    // reference them directly with no per-instance canvas cost.
+    for (const troop of TROOP_TYPES) this.iconTextureKey[troop.id] = `troop-icon-${troop.id}`;
   }
 
   get enemiesRemaining() {
@@ -581,7 +560,7 @@ export class CombatSystem {
       this.graphics.fillRect(e.x - barW / 2, barY, barW * frac, barH);
 
       const iconKey = this.iconTextureKey[e.troop.id];
-      if (iconKey) {
+      if (iconKey && this.scene.textures.exists(iconKey)) {
         const icon = this.getOrCreateIcon(i);
         icon.setTexture(iconKey);
         icon.setPosition(e.x, e.y);

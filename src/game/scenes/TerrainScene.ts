@@ -3,7 +3,10 @@ import { generateTerrain, type TerrainMap } from '../systems/terrainGenerator';
 import { renderTerrainCanvas } from '../systems/terrainRenderer';
 import { BuildSystem, DELETE_TAP_RADIUS, type Point } from '../systems/buildSystem';
 import { CombatSystem, KEEP_SIZE } from '../systems/combatSystem';
+import { TROOP_ICON_SVG } from '../systems/troopIconsSvg';
 import { onSetTool, setTool, onStartRound, publishGameState, type ToolType, type Phase } from '../events';
+
+const ICON_RASTER_SIZE = 160; // px the SVG icons are rasterized to - comfortably above any in-game display size
 
 const TARGET_CELL_COUNT = 256 * 256; // total detail budget, split between axes to match screen aspect
 const MIN_MAP_CELLS = 96;
@@ -41,6 +44,16 @@ export class TerrainScene extends Phaser.Scene {
 
   constructor() {
     super('TerrainScene');
+  }
+
+  preload() {
+    // Phaser's SVG loader expects a base64 data URI specifically (it
+    // atob()s the payload), not a percent-encoded one.
+    for (const [id, svg] of Object.entries(TROOP_ICON_SVG)) {
+      const base64 = btoa(unescape(encodeURIComponent(svg)));
+      const url = `data:image/svg+xml;base64,${base64}`;
+      this.load.svg(`troop-icon-${id}`, url, { width: ICON_RASTER_SIZE, height: ICON_RASTER_SIZE });
+    }
   }
 
   create() {

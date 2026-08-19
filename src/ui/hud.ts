@@ -1,6 +1,6 @@
 import { setTool, onSetTool, requestStartRound, onGameState, type ToolType, type GameStatePayload } from '../game/events';
 import { TROOP_TYPES, UNSPAWNABLE_TROOP_IDS, type TroopType } from '../game/systems/troopData';
-import { troopIconDataUrl } from '../game/systems/troopIcons';
+import { troopIconDataUrl } from '../game/systems/troopIconsSvg';
 import './theme.css';
 
 interface ToolDef {
@@ -38,7 +38,7 @@ function troopCardHtml(t: TroopType): string {
   return `
     <div class="codex-card">
       <div class="codex-card-name">
-        <img class="codex-card-icon" src="${troopIconDataUrl(t.id, 32)}" alt="" />
+        <img class="codex-card-icon" src="${troopIconDataUrl(t.id)}" alt="" />
         ${t.name}
       </div>
       <div class="codex-card-desc">${t.description}</div>
