@@ -12,11 +12,67 @@ interface KeepTarget {
 }
 type EnemyTarget = WallTarget | KeepTarget;
 
+// Troop types are data, not code: adding a new soldier/enemy kind
+// later should mean adding a table entry (and a spawn-selection rule),
+// not restructuring the combat loop.
+export type SoldierType = 'militia' | 'guard';
+export type EnemyType = 'raider';
+
+interface SoldierTypeStats {
+  range: number;
+  damage: number;
+  attackInterval: number;
+  radius: number;
+  color: number;
+}
+
+interface EnemyTypeStats {
+  baseHp: number;
+  hpPerRound: number;
+  speed: number;
+  speedJitter: number;
+  damageToStructure: number;
+  damageToKeep: number;
+  attackInterval: number;
+  radius: number;
+  color: number;
+  darkColor: number;
+}
+
+const SOLDIER_COLOR = 0x3a5a8a;
+const SOLDIER_DARK = 0x16233a;
+const FIGURE_RADIUS = 7;
+const ENEMY_COLOR = 0x8a2e2e;
+const ENEMY_DARK = 0x3a1414;
+
+const SOLDIER_TYPES: Record<SoldierType, SoldierTypeStats> = {
+  // Stationed one-per-wall-section.
+  militia: { range: 72, damage: 9, attackInterval: 0.55, radius: FIGURE_RADIUS, color: SOLDIER_COLOR },
+  // Stationed at towers - stronger, in exchange for costing a structure slot.
+  guard: { range: 96, damage: 14, attackInterval: 0.55, radius: FIGURE_RADIUS + 2, color: SOLDIER_COLOR },
+};
+
+const ENEMY_TYPES: Record<EnemyType, EnemyTypeStats> = {
+  raider: {
+    baseHp: 28,
+    hpPerRound: 6,
+    speed: 150,
+    speedJitter: 0.3,
+    damageToStructure: 9,
+    damageToKeep: 4,
+    attackInterval: 0.9,
+    radius: FIGURE_RADIUS,
+    color: ENEMY_COLOR,
+    darkColor: ENEMY_DARK,
+  },
+};
+
 interface Enemy {
   x: number;
   y: number;
   hp: number;
   maxHp: number;
+  type: EnemyType;
   speed: number;
   target: EnemyTarget;
   attackCooldown: number;
@@ -27,34 +83,13 @@ interface Enemy {
 interface Soldier {
   x: number;
   y: number;
-  range: number;
-  damage: number;
+  type: SoldierType;
   attackCooldown: number;
-  attackInterval: number;
-  bonus: boolean; // stationed at a tower
 }
 
-const SOLDIER_RANGE = 72;
-const SOLDIER_BONUS_RANGE = 96;
-const SOLDIER_DAMAGE = 9;
-const SOLDIER_BONUS_DAMAGE = 14;
-const SOLDIER_ATTACK_INTERVAL = 0.55;
-
-const ENEMY_BASE_HP = 28;
-const ENEMY_HP_PER_ROUND = 6;
-const ENEMY_SPEED = 150;
 const ENEMY_ATTACK_RANGE = 18;
-const ENEMY_ATTACK_INTERVAL = 0.9;
-const ENEMY_STRUCTURE_DAMAGE = 9;
-const ENEMY_KEEP_DAMAGE = 4;
 const ENEMY_BASE_COUNT = 5;
 const ENEMY_COUNT_PER_ROUND = 3;
-
-const ENEMY_COLOR = 0x8a2e2e;
-const ENEMY_DARK = 0x3a1414;
-const SOLDIER_COLOR = 0x3a5a8a;
-const SOLDIER_DARK = 0x16233a;
-const FIGURE_RADIUS = 7;
 
 export const KEEP_SIZE = 42;
 const KEEP_WALL_COLOR = 0x4a4238;
@@ -107,15 +142,7 @@ export class CombatSystem {
 
     for (const t of towers) {
       if (this.soldiers.length >= maxSoldiers) break;
-      this.soldiers.push({
-        x: t.x,
-        y: t.y,
-        range: SOLDIER_BONUS_RANGE,
-        damage: SOLDIER_BONUS_DAMAGE,
-        attackCooldown: 0,
-        attackInterval: SOLDIER_ATTACK_INTERVAL,
-        bonus: true,
-      });
+      this.soldiers.push({ x: t.x, y: t.y, type: 'guard', attackCooldown: 0 });
     }
 
     for (const s of sections) {
@@ -123,20 +150,19 @@ export class CombatSystem {
       this.soldiers.push({
         x: s.a.x + (s.b.x - s.a.x) / 2,
         y: s.a.y + (s.b.y - s.a.y) / 2,
-        range: SOLDIER_RANGE,
-        damage: SOLDIER_DAMAGE,
+        type: 'militia',
         attackCooldown: 0,
-        attackInterval: SOLDIER_ATTACK_INTERVAL,
-        bonus: false,
       });
     }
   }
 
   spawnWave(round: number) {
     const count = ENEMY_BASE_COUNT + round * ENEMY_COUNT_PER_ROUND;
-    const hp = ENEMY_BASE_HP + round * ENEMY_HP_PER_ROUND;
     this.enemies = [];
     for (let i = 0; i < count; i++) {
+      const type = this.pickEnemyType(round);
+      const stats = ENEMY_TYPES[type];
+      const hp = stats.baseHp + round * stats.hpPerRound;
       const { x, y } = this.randomEdgePoint();
       const target = this.acquireTarget(x, y);
       this.enemies.push({
@@ -144,13 +170,20 @@ export class CombatSystem {
         y,
         hp,
         maxHp: hp,
-        speed: ENEMY_SPEED * (0.85 + this.rng() * 0.3),
+        type,
+        speed: stats.speed * (1 - stats.speedJitter / 2 + this.rng() * stats.speedJitter),
         target,
         attackCooldown: 0,
         state: 'moving',
         avoidBias: this.rng() < 0.5 ? 1 : -1,
       });
     }
+  }
+
+  // Only one enemy type exists today; this is the seam where later
+  // waves can start mixing in heavier or specialized attackers by round.
+  private pickEnemyType(_round: number): EnemyType {
+    return 'raider';
   }
 
   // The map border isn't guaranteed to be land - it can dip through a
@@ -218,6 +251,8 @@ export class CombatSystem {
     const liveWalls = new Set(this.buildSystem.getStructures());
 
     for (const enemy of this.enemies) {
+      const stats = ENEMY_TYPES[enemy.type];
+
       if (enemy.target.type === 'wall' && !liveWalls.has(enemy.target.wall)) {
         enemy.target = this.acquireTarget(enemy.x, enemy.y);
         enemy.state = 'moving';
@@ -230,15 +265,15 @@ export class CombatSystem {
         enemy.state = 'attacking';
         enemy.attackCooldown -= dt;
         if (enemy.attackCooldown <= 0) {
-          enemy.attackCooldown = ENEMY_ATTACK_INTERVAL;
+          enemy.attackCooldown = stats.attackInterval;
           if (enemy.target.type === 'wall') {
-            const destroyed = this.buildSystem.damage(enemy.target.wall, ENEMY_STRUCTURE_DAMAGE);
+            const destroyed = this.buildSystem.damage(enemy.target.wall, stats.damageToStructure);
             if (destroyed) {
               enemy.target = this.acquireTarget(enemy.x, enemy.y);
               enemy.state = 'moving';
             }
           } else {
-            this.keepHp = Math.max(0, this.keepHp - ENEMY_KEEP_DAMAGE);
+            this.keepHp = Math.max(0, this.keepHp - stats.damageToKeep);
           }
         }
       } else {
@@ -248,10 +283,11 @@ export class CombatSystem {
     }
 
     for (const soldier of this.soldiers) {
+      const stats = SOLDIER_TYPES[soldier.type];
       soldier.attackCooldown -= dt;
       if (soldier.attackCooldown > 0) continue;
       let closest: Enemy | null = null;
-      let closestDist = soldier.range;
+      let closestDist = stats.range;
       for (const enemy of this.enemies) {
         const d = Phaser.Math.Distance.Between(soldier.x, soldier.y, enemy.x, enemy.y);
         if (d < closestDist) {
@@ -260,8 +296,8 @@ export class CombatSystem {
         }
       }
       if (closest) {
-        closest.hp -= soldier.damage;
-        soldier.attackCooldown = soldier.attackInterval;
+        closest.hp -= stats.damage;
+        soldier.attackCooldown = stats.attackInterval;
       }
     }
 
@@ -286,24 +322,26 @@ export class CombatSystem {
     this.graphics.strokeRect(this.keep.x - KEEP_SIZE / 2, this.keep.y - KEEP_SIZE / 2, KEEP_SIZE, KEEP_SIZE);
 
     for (const s of this.soldiers) {
-      this.graphics.fillStyle(SOLDIER_COLOR, 1);
-      this.graphics.fillCircle(s.x, s.y, s.bonus ? FIGURE_RADIUS + 2 : FIGURE_RADIUS);
+      const stats = SOLDIER_TYPES[s.type];
+      this.graphics.fillStyle(stats.color, 1);
+      this.graphics.fillCircle(s.x, s.y, stats.radius);
       this.graphics.lineStyle(2, SOLDIER_DARK, 1);
-      this.graphics.strokeCircle(s.x, s.y, s.bonus ? FIGURE_RADIUS + 2 : FIGURE_RADIUS);
+      this.graphics.strokeCircle(s.x, s.y, stats.radius);
     }
 
     for (const e of this.enemies) {
-      this.graphics.fillStyle(ENEMY_COLOR, 1);
-      this.graphics.fillCircle(e.x, e.y, FIGURE_RADIUS);
-      this.graphics.lineStyle(2, ENEMY_DARK, 1);
-      this.graphics.strokeCircle(e.x, e.y, FIGURE_RADIUS);
+      const stats = ENEMY_TYPES[e.type];
+      this.graphics.fillStyle(stats.color, 1);
+      this.graphics.fillCircle(e.x, e.y, stats.radius);
+      this.graphics.lineStyle(2, stats.darkColor, 1);
+      this.graphics.strokeCircle(e.x, e.y, stats.radius);
 
-      const barW = FIGURE_RADIUS * 2.4;
+      const barW = stats.radius * 2.4;
       const frac = Phaser.Math.Clamp(e.hp / e.maxHp, 0, 1);
       this.graphics.fillStyle(0x1a1512, 0.8);
-      this.graphics.fillRect(e.x - barW / 2, e.y - FIGURE_RADIUS - 8, barW, 3);
+      this.graphics.fillRect(e.x - barW / 2, e.y - stats.radius - 8, barW, 3);
       this.graphics.fillStyle(0xb0392f, 1);
-      this.graphics.fillRect(e.x - barW / 2, e.y - FIGURE_RADIUS - 8, barW * frac, 3);
+      this.graphics.fillRect(e.x - barW / 2, e.y - stats.radius - 8, barW * frac, 3);
     }
   }
 

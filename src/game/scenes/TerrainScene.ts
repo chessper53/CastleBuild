@@ -66,7 +66,7 @@ export class TerrainScene extends Phaser.Scene {
     });
 
     onStartRound(() => {
-      if (this.phase !== 'build' || !this.combatSystem) return;
+      if (this.phase !== 'build' || !this.combatSystem || !this.hasGate()) return;
       this.activeTool = 'none';
       setTool('none');
       this.combatSystem.stationSoldiers(SOLDIERS_MAX);
@@ -102,6 +102,10 @@ export class TerrainScene extends Phaser.Scene {
     }
   }
 
+  private hasGate(): boolean {
+    return this.buildSystem.getStructures().some((s) => s.kind === 'gate');
+  }
+
   private publishState() {
     publishGameState({
       phase: this.phase,
@@ -111,6 +115,7 @@ export class TerrainScene extends Phaser.Scene {
       soldiersAlive: SOLDIERS_MAX,
       soldiersMax: SOLDIERS_MAX,
       enemiesRemaining: this.combatSystem?.enemiesRemaining ?? 0,
+      hasGate: this.hasGate(),
     });
   }
 
@@ -213,7 +218,10 @@ export class TerrainScene extends Phaser.Scene {
 
       // tower / gate: can only be placed on top of an existing wall
       const snapped = this.buildSystem.snapToWallLine(world.x, world.y);
-      if (snapped) this.buildSystem.addPoint(this.activeTool, snapped.x, snapped.y);
+      if (snapped) {
+        this.buildSystem.addPoint(this.activeTool, snapped.x, snapped.y);
+        this.publishState();
+      }
       this.previewGraphics.clear();
     });
 

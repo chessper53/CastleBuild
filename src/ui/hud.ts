@@ -107,9 +107,11 @@ export function setupHud() {
       keepBarTrack.style.display = 'none';
       startRoundBtn.style.display = 'none';
     } else if (state.phase === 'build') {
-      statusText.textContent = 'Raise your defenses';
+      statusText.textContent = state.hasGate ? 'Raise your defenses' : 'Build a gate before you can start the round';
       keepBarTrack.style.display = 'none';
       startRoundBtn.style.display = '';
+      startRoundBtn.disabled = !state.hasGate;
+      startRoundBtn.classList.toggle('disabled', !state.hasGate);
     } else if (state.phase === 'combat') {
       statusText.textContent = `Wave ${state.round} — ${state.enemiesRemaining} enem${state.enemiesRemaining === 1 ? 'y' : 'ies'} remaining`;
       keepBarTrack.style.display = '';

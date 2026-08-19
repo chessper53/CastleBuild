@@ -186,6 +186,13 @@
   transform: translateY(1px);
 }
 
+.start-round-btn.disabled {
+  background: linear-gradient(180deg, var(--stone-light) 0%, var(--stone) 100%);
+  border-color: var(--iron);
+  color: var(--parchment-dim);
+  cursor: default;
+}
+
 /* Game over overlay */
 .hud-overlay {
   position: fixed;

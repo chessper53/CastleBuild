@@ -9,6 +9,7 @@ export interface GameStatePayload {
   soldiersAlive: number;
   soldiersMax: number;
   enemiesRemaining: number;
+  hasGate: boolean;
 }
 
 export const gameEvents = new EventTarget();
