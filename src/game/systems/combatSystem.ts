@@ -119,7 +119,11 @@ const BIOME_TO_TERRAIN_ID: Partial<Record<Biome, TerrainTypeId>> = {
   // is presently unreachable - kept in the data for when it does.
 };
 
-export const KEEP_SIZE = 42 * SCALE;
+// Independent of SCALE above (which also drives enemy/soldier speed
+// and range) - the keep is a building, sized to match buildSystem's
+// own (separately halved) structure scale, not combat pacing.
+const BUILDING_SCALE = 1.5;
+export const KEEP_SIZE = 42 * BUILDING_SCALE;
 const KEEP_WALL_COLOR = 0x4a4238;
 const KEEP_ROOF_COLOR = 0x7a3a2a;
 

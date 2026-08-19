@@ -130,9 +130,10 @@
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
 
-.tool-btn .icon {
-  font-size: 20px;
-  line-height: 1;
+.tool-icon {
+  width: 22px;
+  height: 22px;
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.6));
 }
 
 .tool-btn:active {
@@ -300,11 +301,16 @@
   width: 44px;
   height: 44px;
   border-radius: 8px;
-  font-size: 20px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.codex-btn-icon {
+  width: 24px;
+  height: 24px;
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.6));
 }
 
 .codex-panel {

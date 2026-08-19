@@ -1,6 +1,7 @@
 import { setTool, onSetTool, requestStartRound, requestSetSpeed, onGameState, type ToolType, type GameStatePayload } from '../game/events';
 import { TROOP_TYPES, UNSPAWNABLE_TROOP_IDS, type TroopType } from '../game/systems/troopData';
 import { troopIconDataUrl } from '../game/systems/troopIconsSvg';
+import { uiIconDataUrl } from '../game/systems/uiIconsSvg';
 import './theme.css';
 
 interface ToolDef {
@@ -11,11 +12,11 @@ interface ToolDef {
 }
 
 const TOOLS: ToolDef[] = [
-  { tool: 'none', label: 'Select', icon: '\u{1F44B}', hint: '' },
-  { tool: 'wall', label: 'Wall', icon: '\u{1F9F1}', hint: 'Drag to raise a wall' },
-  { tool: 'tower', label: 'Tower', icon: '\u{1F3F0}', hint: 'Tap a wall to place a tower' },
-  { tool: 'gate', label: 'Gate', icon: '\u{1F6AA}', hint: 'Tap a wall to place a gate' },
-  { tool: 'delete', label: 'Demolish', icon: '\u{1F528}', hint: 'Tap a structure to remove it' },
+  { tool: 'none', label: 'Select', icon: 'cursor', hint: '' },
+  { tool: 'wall', label: 'Wall', icon: 'wall', hint: 'Drag to raise a wall' },
+  { tool: 'tower', label: 'Tower', icon: 'tower', hint: 'Tap a wall to place a tower' },
+  { tool: 'gate', label: 'Gate', icon: 'gate', hint: 'Tap a wall to place a gate' },
+  { tool: 'delete', label: 'Demolish', icon: 'hammer', hint: 'Tap a structure to remove it' },
 ];
 
 function troopCardHtml(t: TroopType): string {
@@ -77,7 +78,7 @@ export function setupHud() {
 
   const codexBtn = document.createElement('button');
   codexBtn.className = 'hud-panel codex-btn';
-  codexBtn.innerHTML = '\u{1F4D6}';
+  codexBtn.innerHTML = `<img class="codex-btn-icon" src="${uiIconDataUrl('book')}" alt="" />`;
   codexBtn.title = 'Enemy codex';
 
   const codexModal = document.createElement('div');
@@ -121,7 +122,7 @@ export function setupHud() {
   for (const def of TOOLS) {
     const btn = document.createElement('button');
     btn.className = 'tool-btn';
-    btn.innerHTML = `<span class="icon">${def.icon}</span><span>${def.label}</span>`;
+    btn.innerHTML = `<img class="tool-icon" src="${uiIconDataUrl(def.icon)}" alt="" /><span>${def.label}</span>`;
     btn.addEventListener('click', () => {
       setTool(def.tool);
       hint.textContent = def.hint;

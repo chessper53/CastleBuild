@@ -32,7 +32,7 @@ const UNBUILDABLE_BIOMES = new Set<Biome>([Biome.Water]);
 // Structure sizes are absolute world px, independent of the terrain's
 // own CELL_SIZE (see TerrainScene.ts) - see there for how the two
 // scales interact.
-const SCALE = 3;
+const SCALE = 1.5;
 
 const WALL_COLOR = 0x4a4238;
 const WALL_CORE_COLOR = 0x5c5142;
