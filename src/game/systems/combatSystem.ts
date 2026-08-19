@@ -1,22 +1,20 @@
 import Phaser from 'phaser';
-import { BuildSystem, type Point, type PointStructure, type WallSection } from './buildSystem';
+import { BuildSystem, type Point, type PointStructure, type Structure, type WallSection } from './buildSystem';
+import { Biome } from './terrainGenerator';
+import { TROOP_TYPES, TROOP_TYPE_BY_ID, UNSPAWNABLE_TROOP_IDS, type TerrainTypeId, type TroopType } from './troopData';
 
-interface WallTarget {
-  type: 'wall';
-  wall: WallSection;
+interface StructureTarget {
+  type: 'structure';
+  structure: Structure;
   point: Point;
 }
 interface KeepTarget {
   type: 'keep';
   point: Point;
 }
-type EnemyTarget = WallTarget | KeepTarget;
+type EnemyTarget = StructureTarget | KeepTarget;
 
-// Troop types are data, not code: adding a new soldier/enemy kind
-// later should mean adding a table entry (and a spawn-selection rule),
-// not restructuring the combat loop.
 export type SoldierType = 'militia' | 'guard';
-export type EnemyType = 'raider';
 
 interface SoldierTypeStats {
   range: number;
@@ -26,45 +24,16 @@ interface SoldierTypeStats {
   color: number;
 }
 
-interface EnemyTypeStats {
-  baseHp: number;
-  hpPerRound: number;
-  speed: number;
-  speedJitter: number;
-  damageToStructure: number;
-  damageToKeep: number;
-  attackInterval: number;
-  radius: number;
-  color: number;
-  darkColor: number;
-}
-
 const SOLDIER_COLOR = 0x3a5a8a;
 const SOLDIER_DARK = 0x16233a;
-const FIGURE_RADIUS = 7;
-const ENEMY_COLOR = 0x8a2e2e;
-const ENEMY_DARK = 0x3a1414;
-
 const SOLDIER_TYPES: Record<SoldierType, SoldierTypeStats> = {
-  // Stationed one-per-wall-section.
-  militia: { range: 72, damage: 9, attackInterval: 0.55, radius: FIGURE_RADIUS, color: SOLDIER_COLOR },
-  // Stationed at towers - stronger, in exchange for costing a structure slot.
-  guard: { range: 96, damage: 14, attackInterval: 0.55, radius: FIGURE_RADIUS + 2, color: SOLDIER_COLOR },
-};
-
-const ENEMY_TYPES: Record<EnemyType, EnemyTypeStats> = {
-  raider: {
-    baseHp: 28,
-    hpPerRound: 6,
-    speed: 150,
-    speedJitter: 0.3,
-    damageToStructure: 9,
-    damageToKeep: 4,
-    attackInterval: 0.9,
-    radius: FIGURE_RADIUS,
-    color: ENEMY_COLOR,
-    darkColor: ENEMY_DARK,
-  },
+  // Ranges are set to comfortably out-reach archers/crossbowmen (90/75px)
+  // so a defended wall isn't ever in a dead zone against them. The
+  // slowest, longest-ranged siege engines (mangonel/ballista/trebuchet,
+  // 120-180px) still out-range even a tower guard by design - their
+  // setup time and slow reload are the intended counterplay.
+  militia: { range: 95, damage: 9, attackInterval: 0.55, radius: 7, color: SOLDIER_COLOR },
+  guard: { range: 125, damage: 14, attackInterval: 0.55, radius: 9, color: SOLDIER_COLOR },
 };
 
 interface Enemy {
@@ -72,12 +41,13 @@ interface Enemy {
   y: number;
   hp: number;
   maxHp: number;
-  type: EnemyType;
-  speed: number;
+  troop: TroopType;
   target: EnemyTarget;
   attackCooldown: number;
-  state: 'moving' | 'attacking';
+  setupRemaining: number;
+  state: 'moving' | 'setup' | 'attacking';
   avoidBias: number; // -1 or 1, keeps obstacle-avoidance turns consistent instead of jittering
+  stuckTime: number; // seconds since whisker-steering last found a walkable step
 }
 
 interface Soldier {
@@ -87,13 +57,74 @@ interface Soldier {
   attackCooldown: number;
 }
 
-const ENEMY_ATTACK_RANGE = 18;
+// Troop data (troopData.ts) uses small abstract units for speed/range
+// so the numbers read clearly on their own; these convert them into
+// this game's actual pixel/second and pixel-range scale.
+const SPEED_SCALE = 48;
+const RANGE_SCALE = 15;
+const MELEE_ATTACK_RANGE = 18;
+const SETUP_TIME = 2.5;
+const STUCK_FORCE_THRESHOLD = 2; // seconds boxed in before an enemy forces its way through terrain
+const MIN_TERRAIN_SPEED_FACTOR = 0.05; // never fully immobilize - avoids permanent freezes
+
 const ENEMY_BASE_COUNT = 5;
 const ENEMY_COUNT_PER_ROUND = 3;
+
+// Cumulative unlock schedule: a type becomes available in the spawn
+// pool from this round onward. Missing = available from round 1.
+const UNLOCK_ROUND: Record<string, number> = {
+  spearman: 2,
+  archer: 3,
+  man_at_arms: 4,
+  crossbowman: 5,
+  marine_raider: 6,
+  knight: 7,
+  sapper: 8,
+  battering_ram: 9,
+  mangonel: 10,
+  ballista: 12,
+  trebuchet: 14,
+};
+
+const BIOME_TO_TERRAIN_ID: Partial<Record<Biome, TerrainTypeId>> = {
+  [Biome.Plains]: 'PLAINS',
+  [Biome.Mud]: 'MUD',
+  [Biome.Water]: 'WATER',
+  [Biome.River]: 'WATER',
+  [Biome.Hills]: 'HILLS',
+  [Biome.Forest]: 'FOREST',
+  // No SAND biome exists in terrain generation yet, so that modifier
+  // is presently unreachable - kept in the data for when it does.
+};
 
 export const KEEP_SIZE = 42;
 const KEEP_WALL_COLOR = 0x4a4238;
 const KEEP_ROOF_COLOR = 0x7a3a2a;
+
+function darken(hex: number, factor: number): number {
+  const r = Math.round(((hex >> 16) & 0xff) * factor);
+  const g = Math.round(((hex >> 8) & 0xff) * factor);
+  const b = Math.round((hex & 0xff) * factor);
+  return (r << 16) | (g << 8) | b;
+}
+
+const CATEGORY_COLOR: Record<string, number> = {
+  knight: 0x7a2f4a,
+  battering_ram: 0x6b4a2f,
+  siege_tower: 0x6b4a2f,
+  mangonel: 0x6b4a2f,
+  trebuchet: 0x6b4a2f,
+  ballista: 0x6b4a2f,
+  archer: 0xa8622a,
+  crossbowman: 0xa8622a,
+  marine_raider: 0x2a6b7a,
+};
+
+function getEnemyVisual(troop: TroopType): { radius: number; color: number; dark: number } {
+  const radius = Phaser.Math.Clamp(6 + troop.health / 22, 6, 15);
+  const color = CATEGORY_COLOR[troop.id] ?? 0x8a2e2e;
+  return { radius, color, dark: darken(color, 0.45) };
+}
 
 export class CombatSystem {
   private enemies: Enemy[] = [];
@@ -160,30 +191,30 @@ export class CombatSystem {
     const count = ENEMY_BASE_COUNT + round * ENEMY_COUNT_PER_ROUND;
     this.enemies = [];
     for (let i = 0; i < count; i++) {
-      const type = this.pickEnemyType(round);
-      const stats = ENEMY_TYPES[type];
-      const hp = stats.baseHp + round * stats.hpPerRound;
+      const troop = this.pickTroopType(round);
       const { x, y } = this.randomEdgePoint();
       const target = this.acquireTarget(x, y);
       this.enemies.push({
         x,
         y,
-        hp,
-        maxHp: hp,
-        type,
-        speed: stats.speed * (1 - stats.speedJitter / 2 + this.rng() * stats.speedJitter),
+        hp: troop.health,
+        maxHp: troop.health,
+        troop,
         target,
         attackCooldown: 0,
+        setupRemaining: 0,
         state: 'moving',
         avoidBias: this.rng() < 0.5 ? 1 : -1,
+        stuckTime: 0,
       });
     }
   }
 
-  // Only one enemy type exists today; this is the seam where later
-  // waves can start mixing in heavier or specialized attackers by round.
-  private pickEnemyType(_round: number): EnemyType {
-    return 'raider';
+  private pickTroopType(round: number): TroopType {
+    const pool = TROOP_TYPES.filter(
+      (t) => !UNSPAWNABLE_TROOP_IDS.has(t.id) && (UNLOCK_ROUND[t.id] ?? 1) <= round,
+    );
+    return pool[Math.floor(this.rng() * pool.length)] ?? TROOP_TYPE_BY_ID.levy;
   }
 
   // The map border isn't guaranteed to be land - it can dip through a
@@ -195,8 +226,6 @@ export class CombatSystem {
       const p = this.rawEdgePoint();
       if (this.buildSystem.isBuildable(p.x, p.y)) return p;
     }
-    // Every sampled edge point was water (rare) - march inward from the
-    // top edge until we hit land.
     let p: Point = { x: this.worldWidth / 2, y: 0 };
     while (!this.buildSystem.isBuildable(p.x, p.y) && p.y < this.worldHeight) {
       p = { x: p.x, y: p.y + 20 };
@@ -220,9 +249,16 @@ export class CombatSystem {
   }
 
   private acquireTarget(x: number, y: number): EnemyTarget {
-    const nearest = this.buildSystem.nearestWallPoint(x, y);
-    if (nearest) return { type: 'wall', wall: nearest.wall, point: nearest.point };
+    const nearest = this.buildSystem.nearestStructurePoint(x, y);
+    if (nearest) return { type: 'structure', structure: nearest.structure, point: nearest.point };
     return { type: 'keep', point: this.keep };
+  }
+
+  private terrainSpeedFactor(troop: TroopType, x: number, y: number): number {
+    const biome = this.buildSystem.getBiomeAt(x, y);
+    const terrainId = biome ? BIOME_TO_TERRAIN_ID[biome] : undefined;
+    if (!terrainId) return 1;
+    return Math.max(MIN_TERRAIN_SPEED_FACTOR, 1 + troop.terrainModifiers[terrainId]);
   }
 
   // No pathfinding grid - instead, try the direct line to the target
@@ -231,7 +267,8 @@ export class CombatSystem {
   // steering that's enough to walk around a lake instead of through it.
   private stepToward(enemy: Enemy, target: Point, dt: number) {
     const baseAngle = Math.atan2(target.y - enemy.y, target.x - enemy.x);
-    const stepLen = enemy.speed * dt;
+    const speed = SPEED_SCALE * enemy.troop.speed * this.terrainSpeedFactor(enemy.troop, enemy.x, enemy.y);
+    const stepLen = speed * dt;
     const sign = enemy.avoidBias;
     const offsets = [0, 0.4, -0.4, 0.8, -0.8, 1.3, -1.3, 2.0, -2.0, 2.7, -2.7];
     for (const offset of offsets) {
@@ -241,39 +278,81 @@ export class CombatSystem {
       if (this.buildSystem.isBuildable(nx, ny)) {
         enemy.x = nx;
         enemy.y = ny;
+        enemy.stuckTime = 0;
         return;
       }
     }
-    // Boxed in on all tried headings this frame - hold position rather than clip into water.
+    // Boxed in on every tried heading - a concave shoreline can trap
+    // whisker steering in a local minimum with no escape. Past a short
+    // grace period, force a direct step toward the target regardless of
+    // terrain so this can never permanently soft-lock a wave.
+    enemy.stuckTime += dt;
+    if (enemy.stuckTime > STUCK_FORCE_THRESHOLD) {
+      enemy.x += Math.cos(baseAngle) * stepLen;
+      enemy.y += Math.sin(baseAngle) * stepLen;
+    }
+  }
+
+  private structureDamage(troop: TroopType, structure: Structure): number {
+    if (structure.kind === 'gate' && troop.gateDamageMultiplier) {
+      return troop.wallDamage * troop.gateDamageMultiplier;
+    }
+    return troop.wallDamage;
+  }
+
+  private applySplash(troop: TroopType, originPoint: Point, primary: Structure) {
+    if (!troop.splashRadius) return;
+    const radiusPx = troop.splashRadius * RANGE_SCALE;
+    for (const s of this.buildSystem.getStructures()) {
+      if (s === primary) continue;
+      const p = s.kind === 'wallSection' ? { x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2 } : { x: s.x, y: s.y };
+      if (Phaser.Math.Distance.Between(originPoint.x, originPoint.y, p.x, p.y) <= radiusPx) {
+        this.buildSystem.damage(s, this.structureDamage(troop, s));
+      }
+    }
   }
 
   update(dt: number) {
-    const liveWalls = new Set(this.buildSystem.getStructures());
+    const liveStructures = new Set(this.buildSystem.getStructures());
 
     for (const enemy of this.enemies) {
-      const stats = ENEMY_TYPES[enemy.type];
+      const troop = enemy.troop;
 
-      if (enemy.target.type === 'wall' && !liveWalls.has(enemy.target.wall)) {
+      if (enemy.target.type === 'structure' && !liveStructures.has(enemy.target.structure)) {
         enemy.target = this.acquireTarget(enemy.x, enemy.y);
         enemy.state = 'moving';
       }
 
       const targetPoint = enemy.target.point;
       const dist = Phaser.Math.Distance.Between(enemy.x, enemy.y, targetPoint.x, targetPoint.y);
+      const engageRange = (troop.attackRange ? troop.attackRange * RANGE_SCALE : MELEE_ATTACK_RANGE);
 
-      if (dist <= ENEMY_ATTACK_RANGE) {
-        enemy.state = 'attacking';
+      if (dist <= engageRange) {
+        if (enemy.state === 'moving') {
+          enemy.state = troop.requiresSetup ? 'setup' : 'attacking';
+          enemy.setupRemaining = SETUP_TIME;
+          enemy.attackCooldown = 0;
+        }
+
+        if (enemy.state === 'setup') {
+          enemy.setupRemaining -= dt;
+          if (enemy.setupRemaining <= 0) enemy.state = 'attacking';
+          continue;
+        }
+
         enemy.attackCooldown -= dt;
         if (enemy.attackCooldown <= 0) {
-          enemy.attackCooldown = stats.attackInterval;
-          if (enemy.target.type === 'wall') {
-            const destroyed = this.buildSystem.damage(enemy.target.wall, stats.damageToStructure);
+          enemy.attackCooldown = troop.attackCooldown;
+          if (enemy.target.type === 'structure') {
+            const structure = enemy.target.structure;
+            const destroyed = this.buildSystem.damage(structure, this.structureDamage(troop, structure));
+            this.applySplash(troop, targetPoint, structure);
             if (destroyed) {
               enemy.target = this.acquireTarget(enemy.x, enemy.y);
               enemy.state = 'moving';
             }
           } else {
-            this.keepHp = Math.max(0, this.keepHp - stats.damageToKeep);
+            this.keepHp = Math.max(0, this.keepHp - troop.attack);
           }
         }
       } else {
@@ -330,18 +409,22 @@ export class CombatSystem {
     }
 
     for (const e of this.enemies) {
-      const stats = ENEMY_TYPES[e.type];
-      this.graphics.fillStyle(stats.color, 1);
-      this.graphics.fillCircle(e.x, e.y, stats.radius);
-      this.graphics.lineStyle(2, stats.darkColor, 1);
-      this.graphics.strokeCircle(e.x, e.y, stats.radius);
+      const visual = getEnemyVisual(e.troop);
+      this.graphics.fillStyle(visual.color, 1);
+      this.graphics.fillCircle(e.x, e.y, visual.radius);
+      this.graphics.lineStyle(2, visual.dark, 1);
+      this.graphics.strokeCircle(e.x, e.y, visual.radius);
+      if (e.state === 'setup') {
+        this.graphics.lineStyle(2, 0xe0b94f, 0.9);
+        this.graphics.strokeCircle(e.x, e.y, visual.radius + 4);
+      }
 
-      const barW = stats.radius * 2.4;
+      const barW = visual.radius * 2.4;
       const frac = Phaser.Math.Clamp(e.hp / e.maxHp, 0, 1);
       this.graphics.fillStyle(0x1a1512, 0.8);
-      this.graphics.fillRect(e.x - barW / 2, e.y - stats.radius - 8, barW, 3);
+      this.graphics.fillRect(e.x - barW / 2, e.y - visual.radius - 8, barW, 3);
       this.graphics.fillStyle(0xb0392f, 1);
-      this.graphics.fillRect(e.x - barW / 2, e.y - stats.radius - 8, barW * frac, 3);
+      this.graphics.fillRect(e.x - barW / 2, e.y - visual.radius - 8, barW * frac, 3);
     }
   }
 

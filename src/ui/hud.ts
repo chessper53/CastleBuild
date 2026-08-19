@@ -1,4 +1,5 @@
 import { setTool, onSetTool, requestStartRound, onGameState, type ToolType, type GameStatePayload } from '../game/events';
+import { TROOP_TYPES, UNSPAWNABLE_TROOP_IDS, type TroopType } from '../game/systems/troopData';
 import './theme.css';
 
 interface ToolDef {
@@ -15,6 +16,33 @@ const TOOLS: ToolDef[] = [
   { tool: 'gate', label: 'Gate', icon: '\u{1F6AA}', hint: 'Tap a wall to place a gate' },
 ];
 
+function troopCardHtml(t: TroopType): string {
+  const stats: string[] = [
+    `\u{2764}\u{FE0F} ${t.health}`,
+    `\u{1F45F} ${t.speed}`,
+    `\u{2694}\u{FE0F} ${t.attack}`,
+    `\u{1F9F1} ${t.wallDamage}`,
+  ];
+  if (t.attackRange) stats.push(`\u{1F3F9} ${t.attackRange}`);
+
+  const tags: string[] = [];
+  if (t.gateDamageMultiplier) tags.push(`${t.gateDamageMultiplier}× vs gates`);
+  if (t.splashRadius) tags.push(`splash ${t.splashRadius}`);
+  if (t.requiresSetup) tags.push('must set up before firing');
+  if (t.requiresAdjacentToWall) tags.push('only fights structures, not troops');
+  if (t.enablesWallBreach) tags.push('bypasses gates (coming soon)');
+  if (UNSPAWNABLE_TROOP_IDS.has(t.id)) tags.push('not yet seen in the field');
+
+  return `
+    <div class="codex-card">
+      <div class="codex-card-name">${t.name}</div>
+      <div class="codex-card-desc">${t.description}</div>
+      <div class="codex-card-stats">${stats.join('&nbsp;&nbsp;')}</div>
+      ${tags.length ? `<div class="codex-card-tags">${tags.join(' · ')}</div>` : ''}
+    </div>
+  `;
+}
+
 export function setupHud() {
   const root = document.createElement('div');
   root.id = 'ui';
@@ -29,6 +57,28 @@ export function setupHud() {
   `;
   const roundLabel = top.querySelector('.hud-round') as HTMLSpanElement;
   const soldiersCount = top.querySelector('.soldiers-count') as HTMLSpanElement;
+
+  const codexBtn = document.createElement('button');
+  codexBtn.className = 'hud-panel codex-btn';
+  codexBtn.innerHTML = '\u{1F4D6}';
+  codexBtn.title = 'Enemy codex';
+
+  const codexModal = document.createElement('div');
+  codexModal.className = 'hud-overlay codex-overlay';
+  codexModal.innerHTML = `
+    <div class="overlay-panel codex-panel">
+      <div class="codex-header">
+        <h2>Enemy Codex</h2>
+        <button class="codex-close">\u{2715}</button>
+      </div>
+      <div class="codex-list">${TROOP_TYPES.map(troopCardHtml).join('')}</div>
+    </div>
+  `;
+  codexBtn.addEventListener('click', () => codexModal.classList.add('visible'));
+  codexModal.querySelector('.codex-close')?.addEventListener('click', () => codexModal.classList.remove('visible'));
+  codexModal.addEventListener('click', (e) => {
+    if (e.target === codexModal) codexModal.classList.remove('visible');
+  });
 
   const hint = document.createElement('div');
   hint.className = 'hud-panel hud-hint';
@@ -83,10 +133,12 @@ export function setupHud() {
   restartBtn.addEventListener('click', () => window.location.reload());
 
   root.appendChild(top);
+  root.appendChild(codexBtn);
   root.appendChild(hint);
   root.appendChild(status);
   root.appendChild(bottom);
   root.appendChild(overlay);
+  root.appendChild(codexModal);
   document.body.appendChild(root);
 
   onGameState((state: GameStatePayload) => {

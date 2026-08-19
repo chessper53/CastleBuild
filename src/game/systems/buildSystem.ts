@@ -125,6 +125,14 @@ export class BuildSystem {
     return !UNBUILDABLE_BIOMES.has(this.terrain.get(cx, cy).biome);
   }
 
+  /** Biome under a world point, for terrain-dependent troop speed/effectiveness. Null outside the map. */
+  getBiomeAt(worldX: number, worldY: number): Biome | null {
+    const cx = Math.floor(worldX / this.cellSize);
+    const cy = Math.floor(worldY / this.cellSize);
+    if (cx < 0 || cy < 0 || cx >= this.terrain.width || cy >= this.terrain.height) return null;
+    return this.terrain.get(cx, cy).biome;
+  }
+
   getStructures(): readonly Structure[] {
     return this.structures;
   }
@@ -166,17 +174,20 @@ export class BuildSystem {
     return best;
   }
 
-  /** Same as snapToWallLine but with no range cap, for enemy AI targeting. */
-  nearestWallPoint(x: number, y: number): { point: Point; wall: WallSection } | null {
-    let best: { point: Point; wall: WallSection } | null = null;
+  /**
+   * Nearest point on ANY structure - wall section, tower, or gate -
+   * with no range cap. This is what enemy AI targets: gates and towers
+   * are just as attackable as a stretch of wall, not just decoration.
+   */
+  nearestStructurePoint(x: number, y: number): { point: Point; structure: Structure } | null {
+    let best: { point: Point; structure: Structure } | null = null;
     let bestDist = Infinity;
     for (const s of this.structures) {
-      if (s.kind !== 'wallSection') continue;
-      const proj = closestPointOnSegment({ x, y }, s.a, s.b);
-      const d = Phaser.Math.Distance.Between(x, y, proj.x, proj.y);
+      const point = s.kind === 'wallSection' ? closestPointOnSegment({ x, y }, s.a, s.b) : { x: s.x, y: s.y };
+      const d = Phaser.Math.Distance.Between(x, y, point.x, point.y);
       if (d < bestDist) {
         bestDist = d;
-        best = { point: proj, wall: s };
+        best = { point, structure: s };
       }
     }
     return best;

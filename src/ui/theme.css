@@ -268,3 +268,94 @@
 .hud-hint.visible {
   opacity: 1;
 }
+
+/* Codex */
+.codex-btn {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  right: max(10px, env(safe-area-inset-right));
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.codex-panel {
+  max-width: min(560px, 92vw);
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+
+.codex-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.codex-header h2 {
+  font-family: var(--font-display);
+  color: var(--gold-bright);
+  font-size: clamp(16px, 4vw, 20px);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin: 0;
+}
+
+.codex-close {
+  pointer-events: auto;
+  background: transparent;
+  border: none;
+  color: var(--parchment-dim);
+  font-size: 18px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px;
+}
+
+.codex-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.codex-card {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(193, 154, 62, 0.3);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.codex-card-name {
+  font-family: var(--font-display);
+  color: var(--gold-bright);
+  font-size: clamp(13px, 3.5vw, 15px);
+  margin-bottom: 3px;
+}
+
+.codex-card-desc {
+  font-size: clamp(12px, 3vw, 13.5px);
+  color: var(--parchment);
+  margin-bottom: 6px;
+  line-height: 1.35;
+}
+
+.codex-card-stats {
+  font-size: clamp(11px, 2.8vw, 13px);
+  color: var(--parchment-dim);
+}
+
+.codex-card-tags {
+  margin-top: 4px;
+  font-size: clamp(10.5px, 2.6vw, 12px);
+  color: var(--danger);
+  font-style: italic;
+}
