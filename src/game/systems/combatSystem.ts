@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { BuildSystem, type Point, type PointStructure, type Structure, type WallSection } from './buildSystem';
+import { BuildSystem, DEFENDER_PLACEMENT_RADIUS, type Point, type Structure } from './buildSystem';
 import { Biome } from './terrainGenerator';
 import { TROOP_TYPES, TROOP_TYPE_BY_ID, UNSPAWNABLE_TROOP_IDS, type TerrainTypeId, type TroopType } from './troopData';
 
@@ -63,7 +63,12 @@ interface Soldier {
   type: SoldierType;
   attackCooldown: number;
   terrainBonus: number; // multiplier on range/damage - the high ground actually matters
+  structure: Structure; // what they're stationed on - evicted if it falls
 }
+
+// Player-placed, not auto-generated: you decide exactly which wall
+// segments and towers get a defender, up to this many total.
+export const MAX_DEFENDERS = 30;
 
 // Troop data (troopData.ts) uses small abstract units for speed/range
 // so the numbers read clearly on their own; these convert them into
@@ -223,6 +228,13 @@ export class CombatSystem {
   ) {
     this.scene = scene;
     this.graphics = scene.add.graphics();
+    // buildSystem's wall/tower sprites are added to the display list
+    // lazily (only once something's actually built), which can happen
+    // after this graphics object already exists - pin an explicit
+    // depth so defenders/enemies/the keep reliably render on top of
+    // structures regardless of creation order, instead of a defender
+    // standing on a tower sometimes disappearing behind its sprite.
+    this.graphics.setDepth(50);
     this.buildSystem = buildSystem;
     this.keep = keep;
     this.worldWidth = worldWidth;
@@ -266,29 +278,70 @@ export class CombatSystem {
     return (Math.cos(t * Math.PI * 2) + 1) / 2;
   }
 
+  get defendersCount() {
+    return this.soldiers.length;
+  }
+
   /**
-   * Distributes up to maxSoldiers one-per-wall-section (with a
-   * stronger garrison at towers). Soldiers only exist where you've
-   * actually built - nothing built means nothing defended, so there's
-   * no free defensive perimeter around the keep.
+   * Stations a defender at the tapped point, if it's close enough to a
+   * wall or tower and there's budget left. Walls get militia, towers
+   * get the stronger guard - picks whichever structure is actually
+   * closer when both are in range. Returns whether it succeeded, so
+   * the caller knows whether to bother re-publishing state.
    */
-  stationSoldiers(maxSoldiers: number) {
-    this.soldiers = [];
-    const structures = this.buildSystem.getStructures();
-    const towers = structures.filter((s): s is PointStructure => s.kind === 'tower');
-    const sections = structures.filter((s): s is WallSection => s.kind === 'wallSection');
+  placeDefender(x: number, y: number): boolean {
+    if (this.soldiers.length >= MAX_DEFENDERS) return false;
 
-    for (const t of towers) {
-      if (this.soldiers.length >= maxSoldiers) break;
-      this.soldiers.push({ x: t.x, y: t.y, type: 'guard', attackCooldown: 0, terrainBonus: this.terrainDefenseBonus(t.x, t.y) });
+    const wall = this.buildSystem.nearestWallPoint(x, y, DEFENDER_PLACEMENT_RADIUS);
+    const tower = this.buildSystem.nearestTower(x, y, DEFENDER_PLACEMENT_RADIUS);
+
+    let point: Point;
+    let structure: Structure;
+    let type: SoldierType;
+
+    if (tower && (!wall || Phaser.Math.Distance.Between(x, y, tower.x, tower.y) <= Phaser.Math.Distance.Between(x, y, wall.point.x, wall.point.y))) {
+      point = { x: tower.x, y: tower.y };
+      structure = tower;
+      type = 'guard';
+    } else if (wall) {
+      point = wall.point;
+      structure = wall.structure;
+      type = 'militia';
+    } else {
+      return false;
     }
 
-    for (const s of sections) {
-      if (this.soldiers.length >= maxSoldiers) break;
-      const x = s.a.x + (s.b.x - s.a.x) / 2;
-      const y = s.a.y + (s.b.y - s.a.y) / 2;
-      this.soldiers.push({ x, y, type: 'militia', attackCooldown: 0, terrainBonus: this.terrainDefenseBonus(x, y) });
+    this.soldiers.push({
+      x: point.x,
+      y: point.y,
+      type,
+      attackCooldown: 0,
+      terrainBonus: this.terrainDefenseBonus(point.x, point.y),
+      structure,
+    });
+    // Placement can happen during the build phase, before combat's
+    // per-frame update()/render() loop has started - render explicitly
+    // so the new defender shows up immediately instead of staying
+    // invisible until the siege begins.
+    this.render();
+    return true;
+  }
+
+  /** Removes the nearest defender within range, for the demolish tool. */
+  removeDefenderNear(x: number, y: number, radius: number): boolean {
+    let bestIndex = -1;
+    let bestDist = radius;
+    for (let i = 0; i < this.soldiers.length; i++) {
+      const d = Phaser.Math.Distance.Between(x, y, this.soldiers[i].x, this.soldiers[i].y);
+      if (d < bestDist) {
+        bestDist = d;
+        bestIndex = i;
+      }
     }
+    if (bestIndex === -1) return false;
+    this.soldiers.splice(bestIndex, 1);
+    this.render();
+    return true;
   }
 
   // The high ground actually matters: a wall or tower built on hills
@@ -518,6 +571,10 @@ export class CombatSystem {
     }
 
     const liveStructures = new Set(this.buildSystem.getStructures());
+    // A defender stationed on a wall or tower that just fell has
+    // nowhere left to stand - evict them rather than leaving a soldier
+    // floating over rubble.
+    this.soldiers = this.soldiers.filter((s) => liveStructures.has(s.structure));
 
     for (const enemy of this.enemies) {
       const troop = enemy.troop;
@@ -756,6 +813,7 @@ export class CombatSystem {
     let icon = this.enemyIconPool[index];
     if (!icon) {
       icon = this.scene.add.image(0, 0, '__DEFAULT');
+      icon.setDepth(51);
       this.enemyIconPool[index] = icon;
     }
     return icon;
@@ -775,7 +833,7 @@ export class CombatSystem {
         fontStyle: 'bold',
       });
       text.setOrigin(0.5, 0.5);
-      text.setDepth(10);
+      text.setDepth(52);
       this.stackTextPool[index] = text;
     }
     return text;

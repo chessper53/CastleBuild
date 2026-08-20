@@ -16,7 +16,8 @@ const TOOLS: ToolDef[] = [
   { tool: 'wall', label: 'Wall', icon: 'wall', hint: 'Drag to raise a wall' },
   { tool: 'tower', label: 'Tower', icon: 'tower', hint: 'Tap a wall to place a tower' },
   { tool: 'gate', label: 'Gate', icon: 'gate', hint: 'Tap a wall to place a gate' },
-  { tool: 'delete', label: 'Demolish', icon: 'hammer', hint: 'Tap a structure to remove it' },
+  { tool: 'defender', label: 'Defend', icon: 'defender', hint: 'Tap a wall or tower to station a defender' },
+  { tool: 'delete', label: 'Demolish', icon: 'hammer', hint: 'Tap a structure or defender to remove it' },
 ];
 
 function troopCardHtml(t: TroopType): string {
@@ -58,7 +59,7 @@ export function setupHud() {
   top.innerHTML = `
     <span class="hud-round">Day 1</span>
     <div class="hud-resources">
-      <span class="hud-resource"><span class="icon">\u{2694}\u{FE0F}</span><span class="soldiers-count">0</span></span>
+      <span class="hud-resource"><span class="icon">\u{2694}\u{FE0F}</span><span class="soldiers-count">0/30</span></span>
     </div>
     <button class="speed-btn">1×</button>
   `;
@@ -162,7 +163,7 @@ export function setupHud() {
   onGameState((state: GameStatePayload) => {
     const dayIcon = state.isNight ? '\u{1F319}' : '\u{2600}\u{FE0F}';
     roundLabel.textContent = state.phase === 'placement' ? 'Choose Your Site' : `${dayIcon} Day ${state.day}`;
-    soldiersCount.textContent = String(state.soldiersAlive);
+    soldiersCount.textContent = `${state.soldiersAlive}/${state.soldiersMax}`;
 
     const buildAllowed = state.phase === 'build' || state.phase === 'combat';
     for (const b of buttons.values()) {

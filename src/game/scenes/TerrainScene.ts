@@ -1,8 +1,8 @@
 import Phaser from 'phaser';
 import { generateTerrain, type TerrainMap } from '../systems/terrainGenerator';
 import { renderTerrainCanvas } from '../systems/terrainRenderer';
-import { BuildSystem, DELETE_TAP_RADIUS, type Point } from '../systems/buildSystem';
-import { CombatSystem, KEEP_SIZE } from '../systems/combatSystem';
+import { BuildSystem, DELETE_TAP_RADIUS, DEFENDER_PLACEMENT_RADIUS, type Point } from '../systems/buildSystem';
+import { CombatSystem, KEEP_SIZE, MAX_DEFENDERS } from '../systems/combatSystem';
 import { TROOP_ICON_SVG } from '../systems/troopIconsSvg';
 import { UI_ICON_SVG } from '../systems/uiIconsSvg';
 import { ENCAMPMENT_STAGE_SVG } from '../systems/encampmentIconsSvg';
@@ -26,10 +26,10 @@ const CELL_SIZE = 10;
 const MIN_WALL_POINTS = 2;
 const MIN_POINT_SPACING = 10 * 1.5; // world px between recorded points while freehand-drawing a wall - matches the structure scale
 const TAP_THRESHOLD = 8; // screen px of movement below which a pointerdown/up pair counts as a tap, not a drag
-const SOLDIERS_MAX = 0; // defenders disabled for now - enemies vs. structures/keep only
 const STATE_PUBLISH_INTERVAL = 0.1;
 const PLACEMENT_VALID_COLOR = 0xd9c27e;
 const PLACEMENT_INVALID_COLOR = 0xb0392f;
+const DEFENDER_PREVIEW_RADIUS = 26;
 
 export class TerrainScene extends Phaser.Scene {
   private terrain!: TerrainMap;
@@ -101,7 +101,6 @@ export class TerrainScene extends Phaser.Scene {
       if (this.phase !== 'build' || !this.combatSystem || !this.hasGate()) return;
       this.activeTool = 'none';
       setTool('none');
-      this.combatSystem.stationSoldiers(SOLDIERS_MAX);
       // No discrete waves anymore - starting just begins the day
       // clock. The encampment builds itself up and starts sending
       // raiders on its own schedule (see CombatSystem.update).
@@ -140,8 +139,8 @@ export class TerrainScene extends Phaser.Scene {
       isNight: this.combatSystem?.isNight ?? false,
       keepHp: this.combatSystem?.keepHp ?? 100,
       keepMaxHp: this.combatSystem?.keepMaxHp ?? 100,
-      soldiersAlive: SOLDIERS_MAX,
-      soldiersMax: SOLDIERS_MAX,
+      soldiersAlive: this.combatSystem?.defendersCount ?? 0,
+      soldiersMax: MAX_DEFENDERS,
       enemiesRemaining: this.combatSystem?.enemiesRemaining ?? 0,
       hasGate: this.hasGate(),
     });
@@ -149,11 +148,36 @@ export class TerrainScene extends Phaser.Scene {
 
   private placeKeep(point: Point) {
     this.combatSystem = new CombatSystem(this, this.buildSystem, point, this.worldWidth, this.worldHeight);
-    this.combatSystem.stationSoldiers(SOLDIERS_MAX);
     this.combatSystem.update(0);
     this.phase = 'build';
     this.previewGraphics.clear();
     this.publishState();
+  }
+
+  private drawDefenderPlacementPreview(world: Point) {
+    this.previewGraphics.clear();
+    const wall = this.buildSystem.nearestWallPoint(world.x, world.y, DEFENDER_PLACEMENT_RADIUS);
+    const tower = this.buildSystem.nearestTower(world.x, world.y, DEFENDER_PLACEMENT_RADIUS);
+
+    let point: Point | null = null;
+    if (
+      tower &&
+      (!wall ||
+        Phaser.Math.Distance.Between(world.x, world.y, tower.x, tower.y) <=
+          Phaser.Math.Distance.Between(world.x, world.y, wall.point.x, wall.point.y))
+    ) {
+      point = { x: tower.x, y: tower.y };
+    } else if (wall) {
+      point = wall.point;
+    }
+    if (!point) return;
+
+    const budgetLeft = (this.combatSystem?.defendersCount ?? 0) < MAX_DEFENDERS;
+    const color = budgetLeft ? PLACEMENT_VALID_COLOR : PLACEMENT_INVALID_COLOR;
+    this.previewGraphics.fillStyle(color, 0.45);
+    this.previewGraphics.fillCircle(point.x, point.y, DEFENDER_PREVIEW_RADIUS);
+    this.previewGraphics.lineStyle(2, color, 0.9);
+    this.previewGraphics.strokeCircle(point.x, point.y, DEFENDER_PREVIEW_RADIUS);
   }
 
   private drawKeepPlacementPreview(p: Point, valid: boolean) {
@@ -246,11 +270,26 @@ export class TerrainScene extends Phaser.Scene {
       }
 
       if (this.activeTool === 'delete') {
-        const target = this.buildSystem.nearestStructure(world.x, world.y, DELETE_TAP_RADIUS);
-        if (target) {
-          this.buildSystem.remove(target);
+        // Defenders always sit exactly on top of the wall/tower that
+        // stationed them, so a structure is never farther away than
+        // the defender standing on it - check defenders first, or
+        // demolishing a garrisoned wall would always take the
+        // defender out with it instead of just the wall.
+        if (this.combatSystem?.removeDefenderNear(world.x, world.y, DELETE_TAP_RADIUS)) {
           this.publishState();
+        } else {
+          const target = this.buildSystem.nearestStructure(world.x, world.y, DELETE_TAP_RADIUS);
+          if (target) {
+            this.buildSystem.remove(target);
+            this.publishState();
+          }
         }
+        this.previewGraphics.clear();
+        return;
+      }
+
+      if (this.activeTool === 'defender') {
+        if (this.combatSystem?.placeDefender(world.x, world.y)) this.publishState();
         this.previewGraphics.clear();
         return;
       }
@@ -326,6 +365,12 @@ export class TerrainScene extends Phaser.Scene {
         const world = cam.getWorldPoint(pointer.x, pointer.y);
         const target = this.buildSystem.nearestStructure(world.x, world.y, DELETE_TAP_RADIUS);
         this.buildSystem.previewDeleteTarget(this.previewGraphics, target);
+        return;
+      }
+
+      if (this.activeTool === 'defender') {
+        const world = cam.getWorldPoint(pointer.x, pointer.y);
+        this.drawDefenderPlacementPreview(world);
       }
     });
 
@@ -344,7 +389,7 @@ export class TerrainScene extends Phaser.Scene {
         return;
       }
 
-      if (this.phase === 'build' && this.activeTool === 'wall' && this.isDrawingWall) {
+      if ((this.phase === 'build' || this.phase === 'combat') && this.activeTool === 'wall' && this.isDrawingWall) {
         const world = cam.getWorldPoint(pointer.x, pointer.y);
         const snappedEnd = this.buildSystem.snapToWallVertex(world.x, world.y);
         this.wallPoints.push(snappedEnd);

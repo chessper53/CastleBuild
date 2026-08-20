@@ -1,4 +1,4 @@
-export type ToolType = 'none' | 'wall' | 'tower' | 'gate' | 'delete';
+export type ToolType = 'none' | 'wall' | 'tower' | 'gate' | 'defender' | 'delete';
 export type Phase = 'placement' | 'build' | 'combat' | 'gameover';
 
 export interface GameStatePayload {

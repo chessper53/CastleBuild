@@ -59,6 +59,7 @@ const HITBAR_GAP = 10 * 3;
 export const WALL_SNAP_RADIUS = 30 * SCALE; // wall endpoints snap to other wall vertices within this range
 export const STRUCTURE_SNAP_RADIUS = 34 * SCALE; // towers/gates snap onto the nearest wall within this range
 export const DELETE_TAP_RADIUS = 30 * SCALE; // how close a tap must be to a structure for the delete tool to pick it up
+export const DEFENDER_PLACEMENT_RADIUS = 34 * SCALE; // how close a tap must be to a wall/tower to station a defender there
 
 function closestPointOnSegment(p: Point, a: Point, b: Point): Point {
   const abx = b.x - a.x;
@@ -201,6 +202,42 @@ export class BuildSystem {
       if (d < bestDist) {
         bestDist = d;
         best = proj;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Nearest point along any wall section, together with which section
+   * it's actually on - defender placement needs to know exactly which
+   * wall a soldier is standing on (so it can be evicted if that wall
+   * later falls), not just the closest point in the abstract.
+   */
+  nearestWallPoint(x: number, y: number, radius: number): { point: Point; structure: WallSection } | null {
+    let best: { point: Point; structure: WallSection } | null = null;
+    let bestDist = radius;
+    for (const s of this.structures) {
+      if (s.kind !== 'wallSection') continue;
+      const proj = closestPointOnSegment({ x, y }, s.a, s.b);
+      const d = Phaser.Math.Distance.Between(x, y, proj.x, proj.y);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { point: proj, structure: s };
+      }
+    }
+    return best;
+  }
+
+  /** Nearest tower within range, for defender placement. */
+  nearestTower(x: number, y: number, radius: number): PointStructure | null {
+    let best: PointStructure | null = null;
+    let bestDist = radius;
+    for (const s of this.structures) {
+      if (s.kind !== 'tower') continue;
+      const d = Phaser.Math.Distance.Between(x, y, s.x, s.y);
+      if (d < bestDist) {
+        bestDist = d;
+        best = s;
       }
     }
     return best;

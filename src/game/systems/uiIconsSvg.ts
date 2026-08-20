@@ -84,6 +84,13 @@ export const UI_ICON_SVG: Record<string, string> = {
     <rect x="-8" y="-52" width="44" height="22" rx="3" class="wood"/>
     <rect x="-8" y="-41" width="44" height="4" class="accTools"/>
   `),
+  defender: icon('-45 -55 90 110', `
+    <circle cx="0" cy="6" r="26" class="stone"/>
+    <circle cx="0" cy="6" r="26" fill="none" stroke="#2B2118" stroke-width="4"/>
+    <circle cx="0" cy="6" r="10" class="stoneDark"/>
+    <path class="ink" d="M0,-44 L0,6" stroke-width="6"/>
+    <polygon points="0,-44 -9,-30 9,-30" class="accTools"/>
+  `),
   book: icon('-45 -50 90 90', `
     <path d="M-32,-28 C-34,-8 -34,14 -32,34 L-2,26 L-2,-36 Z" class="wood"/>
     <path d="M32,-28 C34,-8 34,14 32,34 L2,26 L2,-36 Z" class="wood"/>
